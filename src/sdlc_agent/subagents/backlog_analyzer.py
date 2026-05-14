@@ -1,9 +1,9 @@
 """Backlog Analyzer subagent for GitHub-native SDLC.
 
 The analyzer reads the target repository's living `specs.md`, compares it with
-existing GitHub Project items, asks the LLM for issue drafts with acceptance
-criteria, creates those GitHub Issues, and returns a verified requirement
-analysis artifact to the orchestrator.
+existing GitHub Issues, asks the LLM for issue drafts with acceptance criteria,
+creates those GitHub Issues, and returns a verified requirement analysis artifact
+to the orchestrator.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ system.
 
 Your job:
   * Read the target repository's `specs.md` living specification.
-  * Compare it with existing GitHub Project items and curated project memory.
+  * Compare it with existing GitHub Issues and curated project memory.
   * Identify gaps that should become GitHub Issues.
   * Produce issue drafts with full, testable acceptance criteria.
   * Mark `ready_for_development` true only when there are no blocking questions
@@ -89,14 +89,14 @@ Your job:
   * Optionally propose durable memory entries with concrete evidence.
 
 Constraints:
-  * GitHub Issues/Projects are the lifecycle system. Do not reference external trackers.
+  * GitHub Issues are the lifecycle system. Do not reference GitHub Projects or external trackers.
   * Respond ONLY in the JSON shape required by the structured-output schema.
 """
 
 
 @dataclass
 class BacklogAnalyzer:
-    """Stateless Backlog Analyzer using GitHub Issues/Projects."""
+    """Stateless Backlog Analyzer using GitHub Issues."""
 
     DEFAULT_SKILLS: ClassVar[tuple[str, ...]] = ("requirement-ambiguity-checklist",)
 
@@ -208,7 +208,7 @@ Target repository specification:
 {spec.body}
 ```
 
-Existing GitHub Project items:
+Existing GitHub Issues:
 {items}
 
 Analyze the living specification, identify missing work, and draft GitHub Issues

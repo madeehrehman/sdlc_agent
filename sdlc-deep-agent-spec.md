@@ -2,7 +2,7 @@
 
 > **How to use this document.** This is both a design spec and an IDE build prompt. Paste it whole into your coding agent as the anchoring context, then drive the build phase by phase (Section 11). Each phase is independently testable. The architecture is fixed; the tech stack in Section 9 separates *recommended* swaps from the *reference implementation* in this repo.
 
-> **Implementation alignment (reference repo).** Sections 1–8 and 13 describe the **architecture** (load-bearing invariants). Sections 9–11 also document how the **current Python package** (`sdlc_agent`) realizes that architecture: vanilla FSM orchestration (not LangGraph), OpenAI with strict JSON-schema outputs, GitHub Issues/Projects fixture clients + local `git` subprocess, subprocess sandbox for the DeveloperTester, skills under `skills/` with per-role default loading, trajectory JSONL under `.deepagent/trajectories/<session-id>/`, and episodic events stamped with `session_id`. See `README.md` for operator-facing setup and `ARCHITECTURE.md` for tradeoffs.
+> **Implementation alignment (reference repo).** Sections 1–8 and 13 describe the **architecture** (load-bearing invariants). Sections 9–11 also document how the **current Python package** (`sdlc_agent`) realizes that architecture: vanilla FSM orchestration (not LangGraph), OpenAI with strict JSON-schema outputs, GitHub Issues lifecycle clients + local `git` subprocess, subprocess sandbox for the DeveloperTester, skills under `skills/` with per-role default loading, trajectory JSONL under `.deepagent/trajectories/<session-id>/`, and episodic events stamped with `session_id`. See `README.md` for operator-facing setup and `ARCHITECTURE.md` for tradeoffs.
 
 ---
 
@@ -40,7 +40,7 @@ Owns:
 - **Project memory** on the filesystem — read and write authority (Section 5).
 - **Memory curation** — the promotion gate from proposed → durable.
 - **Human-in-the-loop gates** — pausing for approval at defined checkpoints.
-- **GitHub Projects** (issue/project lifecycle) and **git** (branch/PR lifecycle orchestration).
+- **GitHub Issues** (issue lifecycle) and **git** (branch/PR lifecycle orchestration).
 
 Does NOT: write code, generate tests, or review PRs directly. It dispatches and gates.
 
@@ -50,7 +50,7 @@ Each is a stateless worker: receives a stateful task assignment (Section 6), doe
 
 | Subagent | Job | Tools / MCP | Filesystem | 
 |---|---|---|---|
-| **Backlog Analyzer** | Read `specs.md`, identify missing work, create GitHub Issues with acceptance criteria, and output structured requirement analysis. | GitHub Projects (read/write issues) | read `specs.md` |
+| **Backlog Analyzer** | Read `specs.md`, identify missing work, create GitHub Issues with acceptance criteria, and output structured requirement analysis. | GitHub Issues (read/write) | read `specs.md` |
 | **Developer** | Implement against the requirement analysis **test-first**: every unit of code is written with its corresponding test in the same TDD loop (failing test → code → pass → iterate). Returns implementation + test suite, all tests green. | Sandbox (execute) | read all, write working tree + test dirs |
 | **PR Reviewer** | Analyze the diff, produce structured review against a rubric. Independent eyes — did not write the code. | git MCP (read diff, post review) | read-only |
 
@@ -100,7 +100,7 @@ contains non-secret startup settings only: the target GitHub repo URL,
 model choices. `OPENAI_API_KEY` and `GITHUB_TOKEN` stay in `.env`.
 
 On startup, the master agent loads `.env`, then `sdlc-agent.yaml`, parses
-`target.repo_url`, derives the GitHub owner/repository/project name, initializes
+`target.repo_url`, derives the GitHub owner/repository name, initializes
 the target repo's `.deepagent/config.yaml`, and starts the SDLC workflow.
 
 ### 5.2 The `.deepagent/` project-local folder
@@ -167,7 +167,7 @@ The assignment is **stateful by injection**. The orchestrator decides what slice
   },
   "constraints": {
     "allowed_tools": ["sandbox", "filesystem:read"],
-    "permissions": { "filesystem": "read-only", "git": "none", "github": "project" }
+    "permissions": { "filesystem": "read-only", "git": "none", "github": "issues" }
   },
   "expected_artifact_schema": { "...JSON schema the return must satisfy..." }
 }
@@ -215,7 +215,7 @@ Enforce least privilege at the subagent boundary — this is the security story.
 | Capability | Orchestrator | Backlog Analyzer | Developer | PR Reviewer |
 |---|---|---|---|---|
 | `.deepagent/` write | ✅ (sole writer) | ❌ | ❌ | ❌ |
-| GitHub Issues / Projects | ✅ issue/project lifecycle | ✅ read specs + create issues | issue metadata | PR/release metadata |
+| GitHub Issues | ✅ issue lifecycle | ✅ read specs + create issues | issue metadata | PR/release metadata |
 | git MCP | ✅ branch/PR lifecycle | ❌ | read context only | ✅ read diff, post review |
 | Filesystem (working tree) | ❌ | ❌ | ✅ read all / write code + tests | ✅ read-only |
 | Sandbox execution | ❌ | ❌ | ✅ | ❌ |
@@ -236,7 +236,7 @@ Swap freely at integration boundaries. Below, **Recommended** is the long-term /
 | **Orchestration** | LangGraph (supervisor, subgraphs, optional checkpointing) | **Vanilla Python FSM** — `SDLCPhase`, pure transition helpers, `Orchestrator.advance()` / `run_to_completion()` |
 | **LLM** | OpenAI or other provider with structured output | **OpenAI** Chat Completions API; `OpenAIClient.complete()` with optional `response_format` JSON Schema (`strict: true`) for subagents; runtime factories route per-role models from `sdlc-agent.yaml` |
 | **Persistence** | Plain files under `.deepagent/` | JSON / JSONL / YAML as in §5.1; `MemoryStores` owns all writes except subagent sandboxes |
-| **GitHub lifecycle** | GitHub Issues + Projects API or MCP | **`FixtureGitHubProject`** for deterministic tests; **`GitHubMCPProjectClient`** for live Issues/Projects via the official GitHub MCP server over stdio/Docker |
+| **GitHub lifecycle** | GitHub Issues API or MCP | **`FixtureGitHubProject`** for deterministic tests; **`GitHubMCPProjectClient`** for live Issues via the official GitHub MCP server over stdio/Docker |
 | **Git** | Real git MCP (diff, PR lifecycle) | **`LocalGitClient`** — local `git` subprocess for diff / files changed / branch; **`GitMCPStub`** for handshake |
 | **Developer sandbox** | Docker (or similar): mount working tree only | **`LocalSubprocessSandbox`** — temp directory root, path containment, bounded timeout, configurable test command (e.g. `python -m unittest discover`) |
 | **Skills** | Shared markdown library, named per task | **`SkillLoader`** reading `skills/*.md`; each subagent declares **`DEFAULT_SKILLS`** (static per-role); see §10 |
@@ -268,7 +268,7 @@ Each phase is independently testable. Do not start a phase before the prior one'
 
 ### Phase 0 — Scaffold
 - System repo structure, `config.yaml` schema, `.deepagent/` initializer.
-- OpenAI client wrapper and role-model routing; local lifecycle client setup for GitHub Projects + git (stubs + handshake).
+- OpenAI client wrapper and role-model routing; local lifecycle client setup for GitHub Issues + git (stubs + handshake).
 - **Test:** point at a repo, `.deepagent/` is created with empty stores; MCP connections handshake.
 
 ### Phase 1 — Orchestrator core
@@ -278,7 +278,7 @@ Each phase is independently testable. Do not start a phase before the prior one'
 - **Test:** a ticket walks INTAKE → DONE against mocked subagents; state persists and resumes mid-lifecycle.
 
 ### Phase 2 — First two subagents (the bookends)
-- **Backlog Analyzer** and **PR Reviewer** — GitHub Project fixture + local `git`; structured LLM outputs and self-verification.
+- **Backlog Analyzer** and **PR Reviewer** — GitHub issue fixture + local `git`; structured LLM outputs and self-verification.
 - Real task assignment contract (Section 6) and artifact return contract (Section 7).
 - **Test:** requirement analysis from `specs.md` into GitHub Issues; structured review against a real local git repo (mocked LLM by default).
 

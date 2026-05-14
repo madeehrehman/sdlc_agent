@@ -63,15 +63,12 @@ class GitHubMCPRuntimeConfig(BaseModel):
     """Non-secret settings for launching the official GitHub MCP server."""
 
     docker_image: str = "ghcr.io/github/github-mcp-server"
-    toolsets: list[str] = Field(default_factory=lambda: ["repos", "issues", "projects"])
-    project_number: int | None = None
-    owner_type: Literal["user", "org"] = "user"
-    status_field_name: str = "Status"
+    toolsets: list[str] = Field(default_factory=lambda: ["repos", "issues"])
     timeout_seconds: float = 30.0
 
 
 class GitHubConfig(BaseModel):
-    """GitHub repo/project settings for the target repository lifecycle."""
+    """GitHub repo and issue lifecycle settings for the target repository."""
 
     repo_url: str | None = None
     owner: str | None = None

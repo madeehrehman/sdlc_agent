@@ -59,7 +59,7 @@ def tmp_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def github_project(tmp_repo: Path) -> FixtureGitHubProject:
-    """A fixture-backed GitHub Project client with a living specs.md."""
+    """A fixture-backed GitHub Issues client with a living specs.md."""
     (tmp_repo / "specs.md").write_text(
         "# Product spec\n\n"
         "## Greeting utility\n"

@@ -22,9 +22,7 @@ REQUIRED_GITHUB_MCP_TOOLS = {
     "get_file_contents",
     "issue_write",
     "issue_read",
-    "projects_list",
-    "projects_get",
-    "projects_write",
+    "list_issues",
 }
 
 
@@ -81,8 +79,5 @@ def build_github_project_client(
         owner=github.owner,
         repository=github.repository,
         project_name=github.project_name,
-        project_number=github.mcp.project_number,
         specs_ref=github.main_branch,
-        owner_type=github.mcp.owner_type,
-        status_field_name=github.mcp.status_field_name,
     )

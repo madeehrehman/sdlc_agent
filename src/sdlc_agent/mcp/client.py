@@ -2,7 +2,7 @@
 
 Phase 0 only requires a ``handshake()`` so the orchestrator can verify it has the
 local lifecycle clients it expects before running a ticket. Real method surfaces
-(GitHub Project updates, git diff fetch, etc.) land alongside the subagents that
+(GitHub issue updates, git diff fetch, etc.) land alongside the subagents that
 need them in Phase 2.
 """
 

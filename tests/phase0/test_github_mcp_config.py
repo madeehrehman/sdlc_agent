@@ -21,9 +21,7 @@ def test_root_config_defaults_github_mcp_runtime_fields(tmp_path: Path) -> None:
 
     assert cfg.github.lifecycle_client == "mcp"
     assert cfg.github.mcp.docker_image == "ghcr.io/github/github-mcp-server"
-    assert cfg.github.mcp.toolsets == ["repos", "issues", "projects"]
-    assert cfg.github.mcp.owner_type == "user"
-    assert cfg.github.mcp.status_field_name == "Status"
+    assert cfg.github.mcp.toolsets == ["repos", "issues"]
     assert cfg.github.mcp.timeout_seconds == 30.0
 
 
@@ -37,9 +35,7 @@ def test_deepagent_config_preserves_github_mcp_runtime_fields(tmp_path: Path) ->
             "github": {
                 "mcp": {
                     "docker_image": "ghcr.io/custom/github-mcp-server:test",
-                    "toolsets": ["repos", "issues", "projects"],
-                    "project_number": 7,
-                    "status_field_name": "Workflow Status",
+                    "toolsets": ["repos", "issues"],
                     "timeout_seconds": 45,
                 }
             },
@@ -52,8 +48,7 @@ def test_deepagent_config_preserves_github_mcp_runtime_fields(tmp_path: Path) ->
 
     assert deepagent.github.lifecycle_client == "mcp"
     assert deepagent.github.mcp.docker_image == "ghcr.io/custom/github-mcp-server:test"
-    assert deepagent.github.mcp.project_number == 7
-    assert deepagent.github.mcp.status_field_name == "Workflow Status"
+    assert deepagent.github.mcp.toolsets == ["repos", "issues"]
     assert deepagent.github.mcp.timeout_seconds == 45.0
 
 

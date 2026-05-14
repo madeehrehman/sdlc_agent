@@ -111,5 +111,5 @@ def test_full_lifecycle_with_real_subagents(
 
     backlog_artifact = stores.load_artifact("GH-1", SDLCPhase.REQUIREMENTS_ANALYSIS)
     assert backlog_artifact is not None
-    assert backlog_artifact.artifact["created_issues"][0]["project_item_id"] == "PVTI_1"
+    assert backlog_artifact.artifact["created_issues"][0]["project_item_id"] == "ISSUE_1"
     assert paths.ticket_artifacts_dir("GH-1").joinpath("review.json").is_file()

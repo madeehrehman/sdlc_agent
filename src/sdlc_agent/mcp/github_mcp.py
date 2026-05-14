@@ -1,10 +1,10 @@
-"""Live GitHub Issues/Projects lifecycle adapter backed by GitHub MCP tools."""
+"""Live GitHub Issues lifecycle adapter backed by GitHub MCP tools."""
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from sdlc_agent.mcp.client import HandshakeResult
@@ -19,25 +19,20 @@ from sdlc_agent.mcp.stdio import MCPToolClient
 
 
 @dataclass
-class _StatusField:
-    field_id: str
-    options_by_name: dict[str, str | int]
-
-
-@dataclass
 class GitHubMCPProjectClient:
-    """GitHub Project lifecycle client implemented with official GitHub MCP tools."""
+    """GitHub issue lifecycle client implemented with official GitHub MCP tools.
+
+    The class keeps the existing protocol method names for orchestrator
+    compatibility, but live state is stored directly on GitHub Issues. Status is
+    represented with exactly one ``status:<slug>`` label per issue.
+    """
 
     tool_client: MCPToolClient
     owner: str
     repository: str
     project_name: str
-    project_number: int | None = None
     specs_ref: str | None = None
-    owner_type: str = "user"
-    status_field_name: str = "Status"
-    server_name: str = "github-mcp-project"
-    _status_field: _StatusField | None = field(default=None, init=False, repr=False)
+    server_name: str = "github-mcp-issues"
 
     def handshake(self) -> HandshakeResult:
         return self.tool_client.handshake()
@@ -58,25 +53,21 @@ class GitHubMCPProjectClient:
         return GitHubSpecDocument(path=data.get("path", relative_path), body=str(body))
 
     def list_project_items(self) -> list[GitHubProjectItem]:
-        project_number = self._project_number()
-        status_field = self._status_field_metadata()
         all_items: list[GitHubProjectItem] = []
         after: str | None = None
         while True:
             args: dict[str, Any] = {
-                "method": "list_project_items",
                 "owner": self.owner,
-                "owner_type": self.owner_type,
-                "project_number": project_number,
-                "fields": [status_field.field_id],
-                "per_page": 50,
+                "repo": self.repository,
+                "state": "open",
+                "perPage": 100,
             }
             if after:
                 args["after"] = after
-            payload = self.tool_client.call_tool("projects_list", args)
+            payload = self.tool_client.call_tool("list_issues", args)
             data = _unwrap(payload)
-            raw_items = data.get("items") or data.get("project_items") or data.get("nodes") or []
-            all_items.extend(self._normalize_project_item(item) for item in raw_items)
+            raw_issues = data.get("issues") or data.get("items") or data.get("nodes") or []
+            all_items.extend(_issue_to_lifecycle_item(_normalize_issue(issue)) for issue in raw_issues)
             page_info = data.get("pageInfo") or data.get("page_info") or {}
             if not page_info.get("hasNextPage"):
                 return all_items
@@ -116,82 +107,39 @@ class GitHubMCPProjectClient:
                 "issue_number": number,
             },
         )
-        return _normalize_issue(_unwrap(payload), fallback_state="closed")
+        return _normalize_issue(_unwrap(payload))
 
     def add_issue_to_project(
         self, issue: GitHubIssue, *, status: str = "Backlog"
     ) -> GitHubProjectItem:
-        project_number = self._project_number()
-        self._status_option_id(status)
-        payload = self.tool_client.call_tool(
-            "projects_write",
-            {
-                "method": "add_project_item",
-                "owner": self.owner,
-                "owner_type": self.owner_type,
-                "project_number": project_number,
-                "item_owner": self.owner,
-                "item_repo": self.repository,
-                "item_type": "issue",
-                "issue_number": issue.number,
-            },
-        )
-        data = _unwrap(payload)
-        item_id = data.get("item_id") or data.get("database_id") or data.get("number")
-        if item_id is None or not _is_numeric_id(item_id):
-            item_id = self._project_item_id_for_issue(issue.number)
-        if item_id is None:
-            raise GitHubProjectError(
-                f"numeric project item id missing from MCP response: {payload!r}"
-            )
-        update_item_id = _coerce_numeric_id(item_id, "project item id")
-        self.update_project_status(str(update_item_id), status)
-        return GitHubProjectItem(
-            item_id=str(update_item_id),
-            issue_number=issue.number,
-            title=issue.title,
-            status=status,
-            acceptance_criteria=list(issue.acceptance_criteria),
-        )
+        return self.update_project_status(f"ISSUE_{issue.number}", status)
 
     def get_project_item(self, item_id: str) -> GitHubProjectItem:
-        payload = self.tool_client.call_tool(
-            "projects_get",
-            {
-                "method": "get_project_item",
-                "owner": self.owner,
-                "owner_type": self.owner_type,
-                "project_number": self._project_number(),
-                "item_id": _coerce_numeric_id(item_id, "project item id"),
-            },
-        )
-        return self._normalize_project_item(_unwrap(payload))
+        return _issue_to_lifecycle_item(self.get_issue(_issue_number_from_item_id(item_id)))
 
     def update_project_status(self, item_id: str, status: str) -> GitHubProjectItem:
-        project_number = self._project_number()
-        status_field = self._status_field_metadata()
-        option_id = self._status_option_id(status)
+        issue_number = _issue_number_from_item_id(item_id)
+        current = self.get_issue(issue_number)
+        labels = _labels_without_status(current.labels)
+        labels.append(_status_label(status))
         payload = self.tool_client.call_tool(
-            "projects_write",
+            "issue_write",
             {
-                "method": "update_project_item",
+                "method": "update",
                 "owner": self.owner,
-                "owner_type": self.owner_type,
-                "project_number": project_number,
-                "item_id": _coerce_numeric_id(item_id, "project item id"),
-                "updated_field": {
-                    "id": _preserve_numeric_id(status_field.field_id),
-                    "value": option_id,
-                },
+                "repo": self.repository,
+                "issue_number": issue_number,
+                "labels": labels,
             },
         )
-        data = _unwrap(payload)
-        return GitHubProjectItem(
-            item_id=str(data.get("item_id") or data.get("id") or item_id),
-            issue_number=int(data.get("issue_number") or 0),
-            title=str(data.get("title") or ""),
-            status=str(data.get("status") or status),
-            acceptance_criteria=list(data.get("acceptance_criteria") or []),
+        return _issue_to_lifecycle_item(
+            _normalize_issue(
+                _unwrap(payload),
+                fallback_title=current.title,
+                fallback_body=current.body,
+                fallback_labels=labels,
+                acceptance_criteria=current.acceptance_criteria,
+            )
         )
 
     def close_issue(self, number: int) -> GitHubIssue:
@@ -205,89 +153,15 @@ class GitHubMCPProjectClient:
                 "state": "closed",
             },
         )
-        return _normalize_issue(_unwrap(payload))
+        return _normalize_issue(_unwrap(payload), fallback_state="closed")
 
     def close(self) -> None:
         self.tool_client.close()
 
     def validate_project_statuses(self, statuses: list[str]) -> None:
         for status in statuses:
-            self._status_option_id(status)
-
-    def _project_number(self) -> int:
-        if self.project_number is not None:
-            return self.project_number
-        payload = self.tool_client.call_tool(
-            "projects_list",
-            {
-                "method": "list_projects",
-                "owner": self.owner,
-                "owner_type": self.owner_type,
-                "query": self.project_name,
-            },
-        )
-        data = _unwrap(payload)
-        projects = data.get("projects") or data.get("items") or data.get("nodes") or []
-        for project in projects:
-            title = project.get("title") or project.get("name")
-            if title == self.project_name:
-                self.project_number = int(project["number"])
-                return self.project_number
-        raise GitHubProjectError(f"GitHub Project not found: {self.project_name}")
-
-    def _status_field_metadata(self) -> _StatusField:
-        if self._status_field is not None:
-            return self._status_field
-        payload = self.tool_client.call_tool(
-            "projects_list",
-            {
-                "method": "list_project_fields",
-                "owner": self.owner,
-                "owner_type": self.owner_type,
-                "project_number": self._project_number(),
-            },
-        )
-        data = _unwrap(payload)
-        fields = data.get("fields") or data.get("items") or data.get("nodes") or []
-        for field_data in fields:
-            if field_data.get("name") != self.status_field_name:
-                continue
-            options = {
-                str(option["name"]): _preserve_numeric_id(option["id"])
-                for option in field_data.get("options", [])
-                if "name" in option and "id" in option
-            }
-            self._status_field = _StatusField(
-                field_id=str(field_data["id"]),
-                options_by_name=options,
-            )
-            return self._status_field
-        raise GitHubProjectError(f"project field not found: {self.status_field_name}")
-
-    def _status_option_id(self, status: str) -> str | int:
-        status_field = self._status_field_metadata()
-        option_id = status_field.options_by_name.get(status)
-        if option_id is None:
-            known = ", ".join(sorted(status_field.options_by_name)) or "(none)"
-            raise GitHubProjectError(f"unknown project status {status!r}; known: {known}")
-        return option_id
-
-    def _project_item_id_for_issue(self, issue_number: int) -> int | None:
-        for item in self.list_project_items():
-            if item.issue_number == issue_number and _is_numeric_id(item.item_id):
-                return _coerce_numeric_id(item.item_id, "project item id")
-        return None
-
-    def _normalize_project_item(self, item: dict[str, Any]) -> GitHubProjectItem:
-        issue = item.get("issue") or item.get("content") or {}
-        issue_number = item.get("issue_number") or issue.get("number") or 0
-        return GitHubProjectItem(
-            item_id=str(item.get("item_id") or item.get("id")),
-            issue_number=int(issue_number),
-            title=str(item.get("title") or issue.get("title") or ""),
-            status=str(item.get("status") or _field_value(item, self.status_field_name) or ""),
-            acceptance_criteria=list(item.get("acceptance_criteria") or []),
-        )
+            if not status or not status.strip():
+                raise GitHubProjectError("empty issue lifecycle status")
 
 
 def _unwrap(payload: dict[str, Any]) -> dict[str, Any]:
@@ -328,26 +202,6 @@ def _content_text(payload: dict[str, Any]) -> str:
     return ""
 
 
-def _preserve_numeric_id(value: Any) -> str | int:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return str(value)
-
-
-def _is_numeric_id(value: Any) -> bool:
-    return isinstance(value, int) or (isinstance(value, str) and value.isdigit())
-
-
-def _coerce_numeric_id(value: Any, label: str) -> int:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    raise GitHubProjectError(f"{label} must be numeric for GitHub MCP: {value!r}")
-
-
 def _normalize_issue(
     data: dict[str, Any],
     *,
@@ -377,9 +231,45 @@ def _normalize_issue(
     )
 
 
+def _issue_to_lifecycle_item(issue: GitHubIssue) -> GitHubProjectItem:
+    return GitHubProjectItem(
+        item_id=f"ISSUE_{issue.number}",
+        issue_number=issue.number,
+        title=issue.title,
+        status=_status_from_labels(issue.labels),
+        acceptance_criteria=list(issue.acceptance_criteria),
+    )
+
+
 def _issue_number_from_url(url: str) -> int | None:
     match = re.search(r"/issues/(\d+)(?:$|[?#])", url)
     return int(match.group(1)) if match else None
+
+
+def _issue_number_from_item_id(item_id: str) -> int:
+    match = re.fullmatch(r"ISSUE_(\d+)", item_id)
+    if not match:
+        raise GitHubProjectError(f"issue item id expected in form ISSUE_<number>: {item_id!r}")
+    return int(match.group(1))
+
+
+def _status_label(status: str) -> str:
+    if not status or not status.strip():
+        raise GitHubProjectError("empty issue lifecycle status")
+    slug = re.sub(r"[^a-z0-9]+", "-", status.lower()).strip("-")
+    return f"status:{slug}"
+
+
+def _status_from_labels(labels: list[str]) -> str:
+    for label in labels:
+        if label.startswith("status:"):
+            slug = label.removeprefix("status:")
+            return " ".join(part.capitalize() for part in slug.split("-") if part)
+    return "Backlog"
+
+
+def _labels_without_status(labels: list[str]) -> list[str]:
+    return [label for label in labels if not label.startswith("status:")]
 
 
 def _render_issue_body(draft: GitHubIssueDraft) -> str:
@@ -387,11 +277,3 @@ def _render_issue_body(draft: GitHubIssueDraft) -> str:
     if not ac:
         ac = "- [ ] Acceptance criteria missing"
     return f"{draft.body.strip()}\n\n## Acceptance Criteria\n{ac}\n"
-
-
-def _field_value(item: dict[str, Any], field_name: str) -> str | None:
-    fields = item.get("fields") or item.get("field_values") or []
-    for field in fields:
-        if field.get("name") == field_name:
-            return field.get("value") or field.get("text") or field.get("name")
-    return None

@@ -17,7 +17,7 @@ def test_build_github_mcp_server_parameters_uses_docker_and_non_secret_config() 
         token="ghp_secret",
         config=GitHubMCPRuntimeConfig(
             docker_image="ghcr.io/custom/github-mcp-server:test",
-            toolsets=["repos", "issues", "projects"],
+            toolsets=["repos", "issues"],
         ),
     )
 
@@ -33,7 +33,7 @@ def test_build_github_mcp_server_parameters_uses_docker_and_non_secret_config() 
         "ghcr.io/custom/github-mcp-server:test",
     ]
     assert params.env["GITHUB_PERSONAL_ACCESS_TOKEN"] == "ghp_secret"
-    assert params.env["GITHUB_TOOLSETS"] == "repos,issues,projects"
+    assert params.env["GITHUB_TOOLSETS"] == "repos,issues"
 
 
 class _FakeTool:
@@ -55,7 +55,7 @@ class _FakeSession:
         self.initialized = True
 
     async def list_tools(self) -> _FakeToolList:
-        return _FakeToolList(["issue_write", "projects_write"])
+        return _FakeToolList(["issue_write", "issue_read", "list_issues"])
 
     async def call_tool(self, name: str, arguments: dict) -> dict:
         self.calls.append((name, arguments))
@@ -83,7 +83,7 @@ def test_stdio_tool_client_handshakes_lists_tools_and_calls_tool() -> None:
     assert handshake.server == "github-mcp"
     assert handshake.transport == "stdio"
     assert session.initialized is True
-    assert tools == ["issue_write", "projects_write"]
+    assert tools == ["issue_write", "issue_read", "list_issues"]
     assert result == {
         "tool": "issue_write",
         "arguments": {"method": "create"},

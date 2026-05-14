@@ -49,7 +49,7 @@ def test_live_backlog_analyzer_against_specs_md(tmp_repo: Path) -> None:
             subagent=SubagentName.BACKLOG_ANALYZER,
             task="live: analyze",
             inputs={"specs_path": "specs.md"},
-            injected_context=InjectedContext(project_facts=["repo uses GitHub Projects"]),
+            injected_context=InjectedContext(project_facts=["repo uses GitHub Issues"]),
             constraints=Constraints(),
         )
     )

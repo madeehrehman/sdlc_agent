@@ -5,18 +5,18 @@
 The SDLC Deep Agent should operate from a GitHub-native target project. A new
 target repository can begin with only `specs.md`; the agent analyzes that living
 specification, creates GitHub Issues with full acceptance criteria, tracks those
-issues in GitHub Projects, implements and tests work on `develop`, reviews
+issues in GitHub Issues, implements and tests work on `develop`, reviews
 against acceptance criteria, and promotes through `release` to `main` with
 PR-gated GitHub Actions.
 
-GitHub Issues and Projects are the backlog and lifecycle system.
+GitHub Issues are the backlog and lifecycle system.
 
 ## Lifecycle
 
 1. `BacklogAnalyzer` reads `specs.md`, current repository context, and existing
-   GitHub Project items.
+   GitHub Issues.
 2. It identifies missing work and creates GitHub Issues with explicit acceptance
-   criteria, then adds those issues to the configured GitHub Project.
+   criteria, then labels those issues with lifecycle status.
 3. The orchestrator selects an issue, injects the issue and acceptance criteria
    into the DeveloperTester assignment, and moves the Project item through SDLC
    states.
@@ -28,7 +28,7 @@ GitHub Issues and Projects are the backlog and lifecycle system.
    `develop` to `release`, and `release` to `main`. The first implementation
    verifies deployment with a container build/run smoke test inside Actions,
    not an external cloud platform.
-7. When `release -> main` is accepted, the orchestrator marks the GitHub Project
+7. When `release -> main` is accepted, the orchestrator marks the GitHub Issue
    item done and closes the GitHub Issue.
 
 ## Boundaries

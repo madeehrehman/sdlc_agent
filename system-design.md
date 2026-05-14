@@ -18,7 +18,7 @@ flowchart TB
   subgraph External["External systems"]
     OAI[OpenAI Chat Completions API]
     GIT[Git working copy]
-    GH[GitHub Issues and Projects fixture or future API]
+    GH[GitHub Issues fixture or future API]
   end
 
   subgraph Process["sdlc_agent process"]
@@ -262,7 +262,7 @@ flowchart TB
   end
 
   subgraph BA["BacklogAnalyzer"]
-    B1["read specs.md and GitHub Project fixture"]
+    B1["read specs.md and GitHub Issues fixture"]
     B2["call LLM"]
     B3["no filesystem to target repo except via OS process"]
   end

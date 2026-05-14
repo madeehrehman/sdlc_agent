@@ -1,4 +1,4 @@
-"""Phase 4: orchestrator mirrors SDLC progress into GitHub Projects."""
+"""Phase 4: orchestrator mirrors SDLC progress into GitHub Issues."""
 
 from __future__ import annotations
 

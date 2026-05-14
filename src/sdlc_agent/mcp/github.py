@@ -1,9 +1,9 @@
 """GitHub-native lifecycle clients.
 
 The first implementation is an in-memory/fixture client used by tests and demos.
-It models the surface the orchestrator and subagents need from GitHub Issues and
-Projects without requiring network access. A live GitHub implementation can
-replace this class behind the same method surface.
+It models the surface the orchestrator and subagents need from GitHub Issues
+without requiring network access. A live GitHub implementation can replace this
+class behind the same method surface.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ class GitHubProjectClient(Protocol):
 
 @dataclass
 class GitHubProjectStub:
-    """Phase-0 handshake stub for GitHub Projects."""
+    """Phase-0 handshake stub for GitHub issue lifecycle."""
 
     server_name: str = "github-project-stub"
 
@@ -79,13 +79,13 @@ class GitHubProjectStub:
             ok=True,
             server=self.server_name,
             transport="in-process",
-            detail="stub GitHub Projects client",
+            detail="stub GitHub issue lifecycle client",
         )
 
 
 @dataclass
 class FixtureGitHubProject:
-    """In-memory GitHub Issues/Projects client rooted at a target repository."""
+    """In-memory GitHub Issues lifecycle client rooted at a target repository."""
 
     repo_root: Path
     project_name: str = "SDLC"
@@ -103,7 +103,7 @@ class FixtureGitHubProject:
 
     def handshake(self) -> HandshakeResult:
         ok = self.repo_root.is_dir()
-        detail = f"github project {self.project_name} for {self.owner}/{self.repository}"
+        detail = f"github issues for {self.owner}/{self.repository}"
         if not ok:
             detail = f"target repo missing: {self.repo_root}"
         return HandshakeResult(
@@ -149,7 +149,7 @@ class FixtureGitHubProject:
     def add_issue_to_project(
         self, issue: GitHubIssue, *, status: str = "Backlog"
     ) -> GitHubProjectItem:
-        item_id = f"PVTI_{issue.number}"
+        item_id = f"ISSUE_{issue.number}"
         item = GitHubProjectItem(
             item_id=item_id,
             issue_number=issue.number,
@@ -171,6 +171,11 @@ class FixtureGitHubProject:
         updated = item.model_copy(update={"status": status})
         self._items[item_id] = updated
         return updated
+
+    def validate_project_statuses(self, statuses: list[str]) -> None:
+        for status in statuses:
+            if not status or not status.strip():
+                raise GitHubProjectError("empty issue lifecycle status")
 
     def close_issue(self, number: int) -> GitHubIssue:
         issue = self.get_issue(number)

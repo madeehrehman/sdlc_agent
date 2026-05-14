@@ -2,7 +2,7 @@
 
 Each subagent is a small class whose ``run(assignment)`` does four things:
 
-1. Gather external inputs (GitHub Project item / git diff) via its lifecycle client.
+1. Gather external inputs (GitHub issue / git diff) via its lifecycle client.
 2. Build a prompt that includes the assignment's ``injected_context`` slice.
 3. Call the LLM with a strict JSON-schema ``response_format``.
 4. Self-verify the parsed artifact and return :class:`ArtifactReturn`.

@@ -209,8 +209,8 @@ are doctrine, not knowledge; doctrine is named.
 
 The GitHub lifecycle seam now has two implementations. `FixtureGitHubProject`
 is still the deterministic test/demo adapter, while `GitHubMCPProjectClient`
-uses the official GitHub MCP server over stdio/Docker for live Issues and
-Projects. The orchestrator and subagents still depend only on
+uses the official GitHub MCP server over stdio/Docker for live Issues. The
+orchestrator and subagents still depend only on
 `GitHubProjectClient`, so live mode is selected by config/factory wiring rather
 than by changing workflow code.
 

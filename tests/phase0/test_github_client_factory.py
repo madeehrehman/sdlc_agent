@@ -75,7 +75,7 @@ def test_factory_builds_mcp_client_and_validates_tools(tmp_path: Path) -> None:
     def tool_client_factory(launch):
         captured["launch"] = launch
         return FakeToolClient(
-            ["get_file_contents", "issue_write", "issue_read", "projects_list", "projects_get", "projects_write"]
+            ["get_file_contents", "issue_write", "issue_read", "list_issues"]
         )
 
     cfg = DeepAgentConfig(
@@ -96,7 +96,7 @@ def test_factory_builds_mcp_client_and_validates_tools(tmp_path: Path) -> None:
 
     assert isinstance(client, GitHubMCPProjectClient)
     assert captured["launch"].env["GITHUB_PERSONAL_ACCESS_TOKEN"] == "secret-token"
-    assert captured["launch"].env["GITHUB_TOOLSETS"] == "repos,issues,projects"
+    assert captured["launch"].env["GITHUB_TOOLSETS"] == "repos,issues"
 
 
 def test_factory_closes_mcp_tool_client_when_required_tools_missing(tmp_path: Path) -> None:

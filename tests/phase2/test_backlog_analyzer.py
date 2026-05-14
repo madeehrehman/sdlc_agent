@@ -188,11 +188,11 @@ def test_prompt_includes_specs_context_existing_project_and_memory(
     llm = fake_llm_factory([_canned_response()])
     analyzer = BacklogAnalyzer(llm=llm, github=github)
 
-    analyzer.run(_assignment(project_facts=["repo uses GitHub Projects"]))
+    analyzer.run(_assignment(project_facts=["repo uses GitHub Issues"]))
 
     last_call = llm._client.chat.completions.calls[-1]  # type: ignore[attr-defined]
     user_msg = last_call["messages"][1]["content"]
-    assert "repo uses GitHub Projects" in user_msg
+    assert "repo uses GitHub Issues" in user_msg
     assert "Login protection" in user_msg
     assert "Existing issue" in user_msg
     assert last_call["response_format"]["type"] == "json_schema"

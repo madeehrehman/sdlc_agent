@@ -4,7 +4,6 @@ target:
 
 github:
   lifecycle_client: mcp
-  project_name_from_repo: true
   develop_branch: develop
   release_branch: release
   main_branch: main
@@ -13,9 +12,6 @@ github:
     toolsets:
       - repos
       - issues
-      - projects
-    owner_type: user
-    status_field_name: Status
     timeout_seconds: 30
 
 model:

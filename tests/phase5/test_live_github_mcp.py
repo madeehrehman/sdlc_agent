@@ -65,7 +65,7 @@ def test_live_github_mcp_reads_specs(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 @pytest.mark.live
 @pytest.mark.github_live
-def test_live_github_mcp_issue_project_round_trip(
+def test_live_github_mcp_issue_lifecycle_round_trip(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -77,7 +77,7 @@ def test_live_github_mcp_issue_project_round_trip(
             GitHubIssueDraft(
                 title=f"SDLC agent live test {unique}",
                 body="Created by an opt-in live GitHub MCP smoke test.",
-                acceptance_criteria=["Issue can be created, added to project, and closed"],
+                acceptance_criteria=["Issue can be created, labeled with status, and closed"],
                 labels=["sdlc-agent-live-test"],
             )
         )
