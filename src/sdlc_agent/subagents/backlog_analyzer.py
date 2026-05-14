@@ -136,6 +136,8 @@ class BacklogAnalyzer:
 
         artifact_body = response["artifact"]
         drafts = self._validated_issue_drafts(artifact_body)
+        if drafts:
+            self._preflight_github_project_statuses(["Backlog"])
         created_issues = self._create_github_issues(drafts) if drafts else []
         artifact_body["created_issues"] = created_issues
         proposals = parse_proposed_memory(response.get("proposed_memory"))
@@ -175,6 +177,11 @@ class BacklogAnalyzer:
                 }
             )
         return created
+
+    def _preflight_github_project_statuses(self, statuses: list[str]) -> None:
+        validate = getattr(self.github, "validate_project_statuses", None)
+        if callable(validate):
+            validate(statuses)
 
     @staticmethod
     def _build_user_prompt(

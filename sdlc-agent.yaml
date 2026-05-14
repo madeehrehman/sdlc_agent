@@ -8,6 +8,14 @@ github:
   develop_branch: develop
   release_branch: release
   main_branch: main
+  mcp:
+    docker_image: ghcr.io/github/github-mcp-server
+    toolsets:
+      - repos
+      - issues
+      - projects
+    status_field_name: Status
+    timeout_seconds: 30
 
 model:
   provider: openai

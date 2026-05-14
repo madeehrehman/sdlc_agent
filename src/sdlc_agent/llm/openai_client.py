@@ -43,7 +43,7 @@ class OpenAIClient:
         temperature: float = 0.0,
         client: OpenAI | None = None,
     ) -> None:
-        self.model = model or os.environ.get("OPENAI_MODEL") or self.DEFAULT_MODEL
+        self.model = model or self.DEFAULT_MODEL
         self.temperature = temperature
 
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY")

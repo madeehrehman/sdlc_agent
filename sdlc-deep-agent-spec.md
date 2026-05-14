@@ -234,14 +234,14 @@ Swap freely at integration boundaries. Below, **Recommended** is the long-term /
 |--------|---------------|---------------------------|
 | **Language** | Python 3.11+ | Python 3.11+ (`requires-python` in `pyproject.toml`) |
 | **Orchestration** | LangGraph (supervisor, subgraphs, optional checkpointing) | **Vanilla Python FSM** — `SDLCPhase`, pure transition helpers, `Orchestrator.advance()` / `run_to_completion()` |
-| **LLM** | OpenAI or other provider with structured output | **OpenAI** Chat Completions API; `OpenAIClient.complete()` with optional `response_format` JSON Schema (`strict: true`) for subagents |
+| **LLM** | OpenAI or other provider with structured output | **OpenAI** Chat Completions API; `OpenAIClient.complete()` with optional `response_format` JSON Schema (`strict: true`) for subagents; runtime factories route per-role models from `sdlc-agent.yaml` |
 | **Persistence** | Plain files under `.deepagent/` | JSON / JSONL / YAML as in §5.1; `MemoryStores` owns all writes except subagent sandboxes |
-| **GitHub lifecycle** | GitHub Issues + Projects API | **`FixtureGitHubProject`** — in-memory issue/project client rooted at the target repo; **`GitHubProjectStub`** for Phase 0 handshake tests |
+| **GitHub lifecycle** | GitHub Issues + Projects API or MCP | **`FixtureGitHubProject`** for deterministic tests; **`GitHubMCPProjectClient`** for live Issues/Projects via the official GitHub MCP server over stdio/Docker |
 | **Git** | Real git MCP (diff, PR lifecycle) | **`LocalGitClient`** — local `git` subprocess for diff / files changed / branch; **`GitMCPStub`** for handshake |
 | **Developer sandbox** | Docker (or similar): mount working tree only | **`LocalSubprocessSandbox`** — temp directory root, path containment, bounded timeout, configurable test command (e.g. `python -m unittest discover`) |
 | **Skills** | Shared markdown library, named per task | **`SkillLoader`** reading `skills/*.md`; each subagent declares **`DEFAULT_SKILLS`** (static per-role); see §10 |
 
-**Optional swaps (unchanged architecture):** Replace `LocalGitClient` with a service-backed git client; replace `FixtureGitHubProject` with a live GitHub API client; wrap `Orchestrator` in LangGraph without changing subagent contracts; add `DockerSandbox` implementing the same `Sandbox` protocol as `LocalSubprocessSandbox`.
+**Optional swaps (unchanged architecture):** Replace `LocalGitClient` with a service-backed git client; replace `GitHubMCPProjectClient` with direct REST/GraphQL if MCP is not desired; wrap `Orchestrator` in LangGraph without changing subagent contracts; add `DockerSandbox` implementing the same `Sandbox` protocol as `LocalSubprocessSandbox`.
 
 ---
 
@@ -264,11 +264,11 @@ Skills are **shared infrastructure**, not bolted onto one agent. A skill is a re
 
 Each phase is independently testable. Do not start a phase before the prior one's test passes.
 
-**Reference repo status:** All phases below are **implemented** in `tests/phase0` … `tests/phase5` with **147** automated tests (plus **2** opt-in live OpenAI tests). `scripts/demo.py` exercises a non-trivial fixture ticket end-to-end with a deterministic canned LLM.
+**Reference repo status:** All phases below are **implemented** in `tests/phase0` … `tests/phase5` with deterministic tests plus opt-in live OpenAI and GitHub MCP smoke tests. `scripts/demo.py` exercises a non-trivial fixture ticket end-to-end with a deterministic canned LLM.
 
 ### Phase 0 — Scaffold
 - System repo structure, `config.yaml` schema, `.deepagent/` initializer.
-- OpenAI client wrapper; local lifecycle client setup for GitHub Projects + git (stubs + handshake).
+- OpenAI client wrapper and role-model routing; local lifecycle client setup for GitHub Projects + git (stubs + handshake).
 - **Test:** point at a repo, `.deepagent/` is created with empty stores; MCP connections handshake.
 
 ### Phase 1 — Orchestrator core
@@ -296,6 +296,7 @@ Each phase is independently testable. Do not start a phase before the prior one'
 ### Phase 5 — Skills + polish
 - Skill library (`skills/*.md`) + `SkillLoader` + per-role `DEFAULT_SKILLS`; prepended to subagent system prompts.
 - **`TrajectoryRecorder`:** `.deepagent/trajectories/<session-id>/<task-id>.jsonl` — full prompt + response per LLM call when recorder is wired; orchestrator **`session_id`** on episodic events.
+- **Live adapters:** root-config runtime assembly, GitHub MCP stdio/Docker client, fixture-vs-MCP lifecycle factory, and opt-in live smoke tests.
 - End-to-end demo (`scripts/demo.py`) and architecture writeup (`ARCHITECTURE.md`).
 - **Test:** skill resolution/injection; one JSONL per task; Developer multi-step loop produces one trace line per iteration + summary line.
 

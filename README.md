@@ -38,8 +38,9 @@ closure.
 
 - Python 3.11 or newer.
 - Git available on `PATH`.
-- OpenAI API key only for live LLM tests or live subagent runs.
-- GitHub token only for a future live GitHub client; tests and demo use fixture clients.
+- Docker for live GitHub MCP mode.
+- OpenAI API key for live LLM tests or live subagent runs.
+- GitHub token with repo/project access for live GitHub MCP lifecycle integration.
 
 ## Installation
 
@@ -76,15 +77,33 @@ target:
 `.deepagent/config.yaml` stores the derived target repo metadata, model
 settings, GitHub project settings, and gate options inside the target repo.
 
+For live GitHub lifecycle mode, `github.lifecycle_client: mcp` launches the
+official GitHub MCP server over stdio/Docker with the configured non-secret
+settings:
+
+```powershell
+docker run -i --rm `
+  -e GITHUB_PERSONAL_ACCESS_TOKEN `
+  -e GITHUB_TOOLSETS `
+  ghcr.io/github/github-mcp-server
+```
+
+The agent passes `GITHUB_TOKEN` from `.env` as `GITHUB_PERSONAL_ACCESS_TOKEN`
+and defaults `GITHUB_TOOLSETS` to `repos,issues,projects`.
+
 ## Quick Start
 
 ```powershell
 python -m pytest
 python scripts\demo.py
 python -m pytest --run-live -m live
+python -m pytest --run-live -m github_live
 ```
 
-Live tests are skipped unless `--run-live` and required credentials are present.
+Live OpenAI tests are skipped unless `--run-live` and `OPENAI_API_KEY` are
+present. Live GitHub MCP tests also require `GITHUB_TOKEN`, Docker, and
+`sdlc-agent.yaml`; they can create and close a test issue labeled
+`sdlc-agent-live-test` in the configured target repo/project.
 
 ## Repository Layout
 
@@ -92,7 +111,10 @@ Live tests are skipped unless `--run-live` and required credentials are present.
 - `src/sdlc_agent/orchestrator/`: FSM, dispatcher, curation, HITL.
 - `src/sdlc_agent/memory/`: `.deepagent/` paths, stores, trajectories.
 - `src/sdlc_agent/mcp/github.py`: fixture GitHub Issues/Projects lifecycle client.
+- `src/sdlc_agent/mcp/github_mcp.py`: live GitHub MCP lifecycle client.
+- `src/sdlc_agent/mcp/stdio.py`: stdio/Docker MCP transport facade.
 - `src/sdlc_agent/mcp/git.py`: local git diff client.
+- `src/sdlc_agent/runtime.py`: root-config startup assembly for live runs.
 - `src/sdlc_agent/subagents/`: BacklogAnalyzer, DeveloperTester, PRReviewer.
 - `skills/`: reusable markdown skills.
 - `scripts/demo.py`: deterministic GitHub-native demo using canned LLM responses.
@@ -113,9 +135,9 @@ Live tests are skipped unless `--run-live` and required credentials are present.
 
 ## Extending
 
-The first GitHub client is fixture-backed and deterministic. A live GitHub
-implementation should satisfy the same surface as `FixtureGitHubProject`:
-read `specs.md`, create issues, add/update Project items, and close issues.
+GitHub lifecycle clients satisfy the same `GitHubProjectClient` surface. Use
+`FixtureGitHubProject` for deterministic tests and `GitHubMCPProjectClient` for
+live GitHub Issues/Projects through the official MCP server.
 
 Future deployment providers can sit behind the current GitHub Actions smoke-test
 boundary. The first implementation only builds and runs a container in Actions

@@ -59,6 +59,16 @@ class MCPConfig(BaseModel):
     git: MCPEndpointConfig = Field(default_factory=MCPEndpointConfig)
 
 
+class GitHubMCPRuntimeConfig(BaseModel):
+    """Non-secret settings for launching the official GitHub MCP server."""
+
+    docker_image: str = "ghcr.io/github/github-mcp-server"
+    toolsets: list[str] = Field(default_factory=lambda: ["repos", "issues", "projects"])
+    project_number: int | None = None
+    status_field_name: str = "Status"
+    timeout_seconds: float = 30.0
+
+
 class GitHubConfig(BaseModel):
     """GitHub repo/project settings for the target repository lifecycle."""
 
@@ -71,6 +81,7 @@ class GitHubConfig(BaseModel):
     release_branch: str = "release"
     main_branch: str = "main"
     lifecycle_client: Literal["fixture", "mcp"] = "fixture"
+    mcp: GitHubMCPRuntimeConfig = Field(default_factory=GitHubMCPRuntimeConfig)
 
 
 class GateConfig(BaseModel):
@@ -159,6 +170,7 @@ class RootGitHubRuntimeConfig(BaseModel):
     develop_branch: str = "develop"
     release_branch: str = "release"
     main_branch: str = "main"
+    mcp: GitHubMCPRuntimeConfig = Field(default_factory=GitHubMCPRuntimeConfig)
 
 
 class RootAgentConfig(BaseModel):
@@ -206,6 +218,7 @@ class RootAgentConfig(BaseModel):
                 release_branch=self.github.release_branch,
                 main_branch=self.github.main_branch,
                 lifecycle_client=self.github.lifecycle_client,
+                mcp=self.github.mcp,
             ),
         )
 

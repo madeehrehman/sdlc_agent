@@ -151,6 +151,25 @@ def test_invalid_later_issue_draft_does_not_partially_create_github_issues(
     assert analyzer.github.list_project_items() == []
 
 
+def test_project_status_preflight_runs_before_creating_github_issues(
+    tmp_repo: Path,
+    fake_llm_factory: Callable[[list[Any]], OpenAIClient],
+) -> None:
+    _write_specs(tmp_repo)
+
+    class PreflightFailingGitHub(FixtureGitHubProject):
+        def validate_project_statuses(self, statuses: list[str]) -> None:
+            raise RuntimeError(f"missing statuses: {statuses}")
+
+    github = PreflightFailingGitHub(repo_root=tmp_repo)
+    analyzer = BacklogAnalyzer(llm=fake_llm_factory([_canned_response()]), github=github)
+
+    with pytest.raises(RuntimeError, match="missing statuses"):
+        analyzer.run(_assignment())
+
+    assert github.list_project_items() == []
+
+
 def test_prompt_includes_specs_context_existing_project_and_memory(
     tmp_repo: Path,
     fake_llm_factory: Callable[[list[Any]], OpenAIClient],

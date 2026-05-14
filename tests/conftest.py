@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
@@ -27,15 +28,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    if config.getoption("--run-live") and os.environ.get("OPENAI_API_KEY"):
-        return
-    if config.getoption("--run-live"):
-        skip = pytest.mark.skip(reason="--run-live set but OPENAI_API_KEY missing")
-    else:
-        skip = pytest.mark.skip(reason="live tests opt-in via --run-live + OPENAI_API_KEY")
     for item in items:
+        if "github_live" in item.keywords:
+            if not config.getoption("--run-live"):
+                item.add_marker(pytest.mark.skip(reason="GitHub MCP live tests opt-in via --run-live"))
+            elif not os.environ.get("GITHUB_TOKEN"):
+                item.add_marker(pytest.mark.skip(reason="GITHUB_TOKEN missing for GitHub MCP live test"))
+            elif shutil.which("docker") is None:
+                item.add_marker(pytest.mark.skip(reason="Docker missing for GitHub MCP live test"))
+            continue
         if "live" in item.keywords:
-            item.add_marker(skip)
+            if not config.getoption("--run-live"):
+                item.add_marker(pytest.mark.skip(reason="live tests opt-in via --run-live + OPENAI_API_KEY"))
+            elif not os.environ.get("OPENAI_API_KEY"):
+                item.add_marker(pytest.mark.skip(reason="--run-live set but OPENAI_API_KEY missing"))
 
 
 # ---------------------------------------------------------------- common dirs

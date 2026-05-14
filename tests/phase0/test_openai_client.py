@@ -29,7 +29,7 @@ def test_env_api_key_initializes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
     monkeypatch.setenv("OPENAI_MODEL", "gpt-4o")
     client = OpenAIClient()
-    assert client.model == "gpt-4o"
+    assert client.model == "gpt-4o-mini"
 
 
 def test_complete_uses_injected_client() -> None:

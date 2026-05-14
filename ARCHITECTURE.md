@@ -205,14 +205,30 @@ are doctrine, not knowledge; doctrine is named.
 
 ---
 
+## Live Integration Boundary
+
+The GitHub lifecycle seam now has two implementations. `FixtureGitHubProject`
+is still the deterministic test/demo adapter, while `GitHubMCPProjectClient`
+uses the official GitHub MCP server over stdio/Docker for live Issues and
+Projects. The orchestrator and subagents still depend only on
+`GitHubProjectClient`, so live mode is selected by config/factory wiring rather
+than by changing workflow code.
+
+OpenAI is intentionally not routed through MCP. `sdlc-agent.yaml` and the
+derived `.deepagent/config.yaml` carry per-role model choices, and runtime
+assembly creates explicit OpenAI clients for Backlog Analyzer, DeveloperTester,
+PR Reviewer, and the reserved orchestrator role. Secrets remain in `.env`.
+
+---
+
 ## What is intentionally not built
 
 These are deferrals, not gaps — they don't change the architecture, they
 swap an implementation under an existing seam.
 
-- **Live GitHub / git integrations.** The `FixtureGitHubProject` and
-  `LocalGitClient` implementations satisfy the same lifecycle surface a live
-  GitHub client and git service would; swapping is a constructor-level change.
+- **Live PR/git service integration.** `LocalGitClient` still owns local diff
+  reads. Posting PR reviews and GitHub Actions orchestration can land behind a
+  later git/PR lifecycle adapter.
 - **Docker sandbox for the Developer.** `LocalSubprocessSandbox` implements
   the `Sandbox` Protocol; a `DockerSandbox` is a drop-in replacement when
   the deployment target moves off the developer's laptop.
@@ -243,5 +259,8 @@ Start at the seams, not the implementations:
    plugged in via a Protocol.
 4. `src/sdlc_agent/subagents/` — each subagent is ~150–350 LOC of prompt +
    self-checks. They're interchangeable.
-5. `scripts/demo.py` — the only place all of the above are wired together
-   end-to-end against a non-trivial fixture ticket.
+5. `src/sdlc_agent/runtime.py` — root-config startup assembly for real runs:
+   target config, GitHub lifecycle client, role-routed OpenAI clients, registry,
+   and orchestrator.
+6. `scripts/demo.py` — deterministic fixture wire-up against a non-trivial
+   ticket.

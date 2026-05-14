@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from sdlc_agent.config import ModelConfig
 from sdlc_agent.contracts import (
     Constraints,
     InjectedContext,
@@ -18,14 +19,15 @@ from sdlc_agent.contracts import (
     TaskAssignment,
 )
 from sdlc_agent.llm import OpenAIClient
+from sdlc_agent.llm.factory import model_for_role
 from sdlc_agent.mcp.git import LocalGitClient
 from sdlc_agent.mcp.github import FixtureGitHubProject
 from sdlc_agent.subagents import BacklogAnalyzer, PRReviewer
 
 
-def _live_client() -> OpenAIClient:
+def _live_client(role: SubagentName) -> OpenAIClient:
     return OpenAIClient(
-        model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+        model=model_for_role(ModelConfig(), role),
         api_key=os.environ["OPENAI_API_KEY"],
     )
 
@@ -36,7 +38,10 @@ def test_live_backlog_analyzer_against_specs_md(tmp_repo: Path) -> None:
         "# Product spec\n\nAdd a greet(name) helper returning hello text.\n",
         encoding="utf-8",
     )
-    analyzer = BacklogAnalyzer(llm=_live_client(), github=FixtureGitHubProject(tmp_repo))
+    analyzer = BacklogAnalyzer(
+        llm=_live_client(SubagentName.BACKLOG_ANALYZER),
+        github=FixtureGitHubProject(tmp_repo),
+    )
     out = analyzer.run(
         TaskAssignment(
             task_id="live-1",
@@ -55,7 +60,8 @@ def test_live_backlog_analyzer_against_specs_md(tmp_repo: Path) -> None:
 @pytest.mark.live
 def test_live_pr_reviewer_against_local_diff(small_git_repo: dict) -> None:
     reviewer = PRReviewer(
-        llm=_live_client(), git=LocalGitClient(repo_root=small_git_repo["repo"])
+        llm=_live_client(SubagentName.PR_REVIEWER),
+        git=LocalGitClient(repo_root=small_git_repo["repo"]),
     )
     out = reviewer.run(
         TaskAssignment(
