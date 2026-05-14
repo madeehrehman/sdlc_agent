@@ -296,7 +296,7 @@ Each phase is independently testable. Do not start a phase before the prior one'
 ### Phase 5 — Skills + polish
 - Skill library (`skills/*.md`) + `SkillLoader` + per-role `DEFAULT_SKILLS`; prepended to subagent system prompts.
 - **`TrajectoryRecorder`:** `.deepagent/trajectories/<session-id>/<task-id>.jsonl` — full prompt + response per LLM call when recorder is wired; orchestrator **`session_id`** on episodic events.
-- **Live adapters:** root-config runtime assembly, GitHub MCP stdio/Docker client, fixture-vs-MCP lifecycle factory, and opt-in live smoke tests.
+- **Live adapters:** root-config runtime assembly, GitHub MCP stdio/Docker client, fixture-vs-MCP lifecycle factory, `sdlc-agent` workflow runner, and opt-in live smoke tests.
 - End-to-end demo (`scripts/demo.py`) and architecture writeup (`ARCHITECTURE.md`).
 - **Test:** skill resolution/injection; one JSONL per task; Developer multi-step loop produces one trace line per iteration + summary line.
 

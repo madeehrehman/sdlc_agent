@@ -231,7 +231,9 @@ with full acceptance criteria."""
         return [
             VerificationCheck(
                 check="source_spec matches requested specs document",
-                passed=artifact.get("source_spec") == spec.path,
+                passed=BacklogAnalyzer._source_spec_matches(
+                    artifact.get("source_spec"), spec.path
+                ),
             ),
             VerificationCheck(
                 check="at least one GitHub issue draft present",
@@ -256,3 +258,9 @@ with full acceptance criteria."""
                 ),
             ),
         ]
+
+    @staticmethod
+    def _source_spec_matches(source_spec: Any, expected_path: str) -> bool:
+        if not isinstance(source_spec, str):
+            return False
+        return source_spec == expected_path or source_spec.startswith(f"{expected_path} ")

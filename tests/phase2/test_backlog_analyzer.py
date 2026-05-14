@@ -97,6 +97,22 @@ def test_backlog_analyzer_creates_github_issue_with_acceptance_criteria(
     assert github.list_project_items()[0].status == "Backlog"
 
 
+def test_source_spec_can_include_human_readable_label(
+    tmp_repo: Path,
+    fake_llm_factory: Callable[[list[Any]], OpenAIClient],
+) -> None:
+    _write_specs(tmp_repo)
+    llm = fake_llm_factory(
+        [_canned_response(source_spec="specs.md (Product spec)")]
+    )
+    analyzer = BacklogAnalyzer(llm=llm, github=FixtureGitHubProject(repo_root=tmp_repo))
+
+    out = analyzer.run(_assignment())
+
+    assert out.verification.passed is True
+    assert out.status is TaskStatus.COMPLETED
+
+
 def test_missing_acceptance_criteria_fails_self_check(
     tmp_repo: Path,
     fake_llm_factory: Callable[[list[Any]], OpenAIClient],

@@ -236,9 +236,9 @@ swap an implementation under an existing seam.
   rolled FSM. LangGraph adds graphical introspection and built-in
   checkpointing; the existing per-transition `save_ticket_state` already
   provides the durability guarantee LangGraph's checkpointing would.
-- **CLI entrypoints** (`sdlc-agent init|run|status`). `scripts/demo.py`
-  shows the full wire-up; promoting that to an installed console-script is
-  a `[project.scripts]` line.
+- **Expanded CLI commands** (`sdlc-agent init|status|resume`). The current
+  `sdlc-agent` entrypoint runs backlog or full workflow modes from
+  `sdlc-agent.yaml`; richer lifecycle commands can layer on top.
 - **Per-task skill resolution.** `TaskAssignment.skills: list[str]`
   augments the current static-per-role mapping; the loader and assembly
   helper are already written to consume an arbitrary name list.

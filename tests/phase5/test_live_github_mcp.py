@@ -61,6 +61,7 @@ def test_live_github_mcp_reads_specs(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     assert spec.path.endswith(specs_path)
     assert spec.body.strip()
+    assert "successfully downloaded" not in spec.body
 
 
 @pytest.mark.live

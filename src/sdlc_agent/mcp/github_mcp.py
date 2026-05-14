@@ -168,6 +168,9 @@ def _unwrap(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("isError") is True:
         raise GitHubProjectError(_content_text(payload) or "GitHub MCP tool returned an error")
     if "content" in payload:
+        resource_text = _resource_text(payload)
+        if resource_text:
+            return {"content": resource_text}
         text = _content_text(payload)
         if text:
             try:
@@ -200,6 +203,20 @@ def _content_text(payload: dict[str, Any]) -> str:
     if isinstance(content, str):
         return content
     return ""
+
+
+def _resource_text(payload: dict[str, Any]) -> str:
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        resource = item.get("resource")
+        if isinstance(resource, dict) and resource.get("text") is not None:
+            parts.append(str(resource["text"]))
+    return "\n".join(parts)
 
 
 def _normalize_issue(

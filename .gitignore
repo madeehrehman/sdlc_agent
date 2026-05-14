@@ -19,6 +19,7 @@ venv/
 
 # runtime memory (project-local; not source of truth)
 .deepagent/
+.target/
 
 # editor
 .vscode/

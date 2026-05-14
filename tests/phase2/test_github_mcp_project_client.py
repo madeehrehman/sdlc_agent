@@ -73,6 +73,35 @@ def test_read_specs_uses_get_file_contents() -> None:
     ]
 
 
+def test_read_specs_extracts_resource_text_from_live_mcp_shape() -> None:
+    fake = RecordingMCPToolClient(
+        {
+            ("get_file_contents", None): {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "successfully downloaded text file (SHA: abc123)",
+                    },
+                    {
+                        "type": "resource",
+                        "resource": {
+                            "mimeType": "text/plain; charset=utf-8",
+                            "text": "# Tic-Tac-Toe\n\nBuild a browser game.",
+                        },
+                    },
+                ],
+                "isError": False,
+            }
+        }
+    )
+
+    spec = _client(fake).read_specs("specs.md")
+
+    assert spec.path == "specs.md"
+    assert spec.body.startswith("# Tic-Tac-Toe")
+    assert "successfully downloaded" not in spec.body
+
+
 def test_create_issue_renders_acceptance_criteria_and_normalizes_live_shape() -> None:
     fake = RecordingMCPToolClient(
         {

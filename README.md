@@ -99,6 +99,29 @@ python -m pytest --run-live -m live
 python -m pytest --run-live -m github_live
 ```
 
+Run the live SDLC agent from the root config:
+
+```powershell
+# Fetch specs.md via GitHub MCP, analyze backlog, create GitHub Issues,
+# label the first adopted issue, then stop at DEVELOPMENT.
+sdlc-agent --mode backlog --ticket-id GH-SEED
+```
+
+To continue through DeveloperTester and PRReviewer, provide a local target
+working tree for the code/test loop and git diff review:
+
+```powershell
+sdlc-agent --mode full `
+  --target-repo-root ..\sdlc_agent_tictactoe `
+  --ticket-id GH-SEED `
+  --base-ref develop `
+  --head-ref HEAD
+```
+
+`full` mode runs the current local implementation and review loop. Real branch
+creation, PR creation, and GitHub Actions promotion remain a later integration
+behind the git/PR boundary.
+
 Live OpenAI tests are skipped unless `--run-live` and `OPENAI_API_KEY` are
 present. Live GitHub MCP tests also require `GITHUB_TOKEN`, Docker, and
 `sdlc-agent.yaml`; they can create, status-label, and close a test issue labeled
@@ -114,6 +137,7 @@ present. Live GitHub MCP tests also require `GITHUB_TOKEN`, Docker, and
 - `src/sdlc_agent/mcp/stdio.py`: stdio/Docker MCP transport facade.
 - `src/sdlc_agent/mcp/git.py`: local git diff client.
 - `src/sdlc_agent/runtime.py`: root-config startup assembly for live runs.
+- `src/sdlc_agent/runner.py`: operator workflow runner used by the CLI.
 - `src/sdlc_agent/subagents/`: BacklogAnalyzer, DeveloperTester, PRReviewer.
 - `skills/`: reusable markdown skills.
 - `scripts/demo.py`: deterministic GitHub-native demo using canned LLM responses.
