@@ -1,0 +1,19 @@
+target:
+  repo_url: https://github.com/madeehrehman/sdlc_agent_tictactoe
+  specs_path: spec.md
+
+github:
+  lifecycle_client: mcp
+  project_name_from_repo: true
+  develop_branch: develop
+  release_branch: release
+  main_branch: main
+
+model:
+  provider: openai
+  default: gpt-4o-mini
+  roles:
+    orchestrator: gpt-4.1
+    backlog_analyzer: gpt-4.1
+    developer: gpt-4.1
+    pr_reviewer: gpt-4.1

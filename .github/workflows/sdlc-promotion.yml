@@ -1,0 +1,86 @@
+name: SDLC Promotion
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - release
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  feature-to-develop:
+    name: feature to develop gate
+    if: github.base_ref == 'develop' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: |
+          if [ -f pyproject.toml ]; then
+            python -m pip install -e ".[dev]"
+          fi
+      - name: Run tests
+        run: |
+          if [ -f pyproject.toml ]; then
+            python -m pytest
+          else
+            echo "No pyproject.toml present; define project tests before enabling this gate."
+          fi
+
+  develop-to-release:
+    name: develop to release gate
+    if: github.base_ref == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate promotion source
+        run: |
+          echo "Promotion PRs into release must come from develop."
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.head_ref }}" != "develop" ]; then
+            echo "Expected head branch develop, got ${{ github.head_ref }}"
+            exit 1
+          fi
+
+  container-smoke:
+    name: container-smoke
+    if: github.base_ref == 'release' || github.base_ref == 'main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container when Dockerfile exists
+        run: |
+          if [ ! -f Dockerfile ]; then
+            echo "No Dockerfile present; skipping container smoke for this target repo."
+            exit 0
+          fi
+          docker build -t sdlc-target-smoke .
+      - name: Run container smoke when Dockerfile exists
+        run: |
+          if [ ! -f Dockerfile ]; then
+            exit 0
+          fi
+          docker run --rm sdlc-target-smoke
+
+  release-to-main:
+    name: release to main gate
+    needs:
+      - container-smoke
+    if: github.base_ref == 'main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate promotion source
+        run: |
+          echo "Promotion PRs into main must come from release."
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.head_ref }}" != "release" ]; then
+            echo "Expected head branch release, got ${{ github.head_ref }}"
+            exit 1
+          fi
