@@ -88,7 +88,8 @@ docker run -i --rm `
 ```
 
 The agent passes `GITHUB_TOKEN` from `.env` as `GITHUB_PERSONAL_ACCESS_TOKEN`
-and defaults `GITHUB_TOOLSETS` to `repos,issues`.
+and defaults `GITHUB_TOOLSETS` to `repos,issues,pull_requests` (the `pull_requests`
+toolset is required for automated PR creation from the agent).
 
 ## Quick Start
 
@@ -108,7 +109,7 @@ sdlc-agent --mode backlog --ticket-id GH-SEED
 ```
 
 To continue through DeveloperTester and PRReviewer, provide a local target
-working tree for the code/test loop and git diff review:
+clone (the repo that holds `.deepagent/`) for the code/test loop and git diff review:
 
 ```powershell
 sdlc-agent --mode full `
@@ -118,9 +119,28 @@ sdlc-agent --mode full `
   --head-ref HEAD
 ```
 
-`full` mode runs the current local implementation and review loop. Real branch
-creation, PR creation, and GitHub Actions promotion remain a later integration
-behind the git/PR boundary.
+### Issue-driven full run (worktree + PR)
+
+For an **existing** GitHub issue, `full` mode can skip backlog analysis, create a
+dedicated git **worktree** and branch from your base branch (default `develop` from
+config), run development + review in that sandbox, **commit and push** after the
+development gate passes, then **open a PR** into the base branch via GitHub MCP
+`create_pull_request`. The local clone must already contain the base branch; the
+runner does **not** create `develop` / `release` / `main` for you.
+
+```powershell
+sdlc-agent --mode full `
+  --target-repo-root ..\my_clone `
+  --issue-number 5 `
+  --base-ref develop
+```
+
+Optional: `--worktrees-dir` to override the default `<target>/.worktrees/` parent
+directory for per-ticket worktrees. Release/main promotion and Actions are still
+out of scope for this path; the issue stays open with lifecycle labels through
+`DONE` (e.g. Release Ready unless `--release-to-main-accepted`).
+
+`full` mode without `--issue-number` runs the usual backlog-driven path for a ticket.
 
 Live OpenAI tests are skipped unless `--run-live` and `OPENAI_API_KEY` are
 present. Live GitHub MCP tests also require `GITHUB_TOKEN`, Docker, and

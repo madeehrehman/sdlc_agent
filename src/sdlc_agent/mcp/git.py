@@ -84,6 +84,46 @@ class LocalGitClient:
     def current_branch(self) -> str:
         return self._run("rev-parse", "--abbrev-ref", "HEAD").strip()
 
+    def ref_exists(self, ref: str) -> bool:
+        try:
+            self._run("rev-parse", "--verify", f"{ref}^{{commit}}")
+        except GitMCPError:
+            return False
+        return True
+
+    def add_worktree(self, path: Path, *, new_branch: str, start_ref: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._run("worktree", "add", str(path), "-b", new_branch, start_ref)
+
+    def remove_worktree(self, path: Path, *, force: bool = True) -> None:
+        args: list[str] = ["worktree", "remove", str(path)]
+        if force:
+            args.append("--force")
+        self._run(*args)
+
+    def has_uncommitted_changes(self) -> bool:
+        return bool(self._run("status", "--porcelain").strip())
+
+    def commit_all(self, message: str) -> bool:
+        """Stage and commit all changes. Returns False if there was nothing to commit."""
+        if not self.has_uncommitted_changes():
+            return False
+        self._run("add", "-A")
+        self._run(
+            "-c",
+            "user.email=sdlc-agent@local",
+            "-c",
+            "user.name=sdlc-agent",
+            "commit",
+            "-m",
+            message,
+        )
+        return True
+
+    def push_branch(self, branch: str | None = None, *, remote: str = "origin") -> None:
+        b = branch or self.current_branch()
+        self._run("push", "-u", remote, b)
+
     # ------------------------------------------------------------- internal
     def _run(self, *args: str) -> str:
         try:

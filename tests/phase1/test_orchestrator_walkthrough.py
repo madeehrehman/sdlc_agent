@@ -189,3 +189,25 @@ def test_state_file_named_by_ticket(tmp_repo: Path, ticket_id: str) -> None:
     orch = Orchestrator(paths=paths, registry=_ok_registry())
     orch.intake(ticket_id)
     assert paths.state_file(ticket_id).exists()
+
+
+def test_issue_intake_skips_requirements_analysis(tmp_repo: Path) -> None:
+    from sdlc_agent.contracts import ArtifactReturn, TaskStatus, VerificationBlock
+
+    paths = initialize_deepagent(tmp_repo)
+    registry = _ok_registry()
+    orch = Orchestrator(paths=paths, registry=registry)
+    orch.memory.save_artifact(
+        "T-skip",
+        SDLCPhase.REQUIREMENTS_ANALYSIS,
+        ArtifactReturn(
+            task_id="seed",
+            status=TaskStatus.COMPLETED,
+            artifact={"summary": "from issue", "acceptance_criteria": ["ac"]},
+            verification=VerificationBlock(passed=True, self_checks=[]),
+            proposed_memory=[],
+        ),
+    )
+    state = orch.intake("T-skip", ticket_inputs={"skip_requirements_analysis": True})
+    assert state.current_phase is SDLCPhase.DEVELOPMENT
+    assert registry[SubagentName.BACKLOG_ANALYZER].call_count == 0

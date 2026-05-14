@@ -22,6 +22,8 @@ def main(argv: list[str] | None = None) -> int:
         head_ref=args.head_ref,
         release_to_main_accepted=args.release_to_main_accepted,
         session_id=args.session_id,
+        issue_number=args.issue_number,
+        worktrees_dir=args.worktrees_dir,
     )
     print(f"ticket_id={result.ticket_id}")
     print(f"mode={result.mode}")
@@ -30,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"github_issue_number={result.github_issue_number}")
     if result.github_item_id is not None:
         print(f"github_item_id={result.github_item_id}")
+    if result.github_pr_number is not None:
+        print(f"github_pr_number={result.github_pr_number}")
+    if result.github_pr_url is not None:
+        print(f"github_pr_url={result.github_pr_url}")
     print(f"state_path={result.state_path}")
     print(f"artifacts_dir={result.artifacts_dir}")
     return 0
@@ -89,6 +95,18 @@ def _parser() -> argparse.ArgumentParser:
         "--release-to-main-accepted",
         action="store_true",
         help="allow DONE to close the issue instead of leaving it Release Ready",
+    )
+    parser.add_argument(
+        "--issue-number",
+        type=int,
+        default=None,
+        help="existing GitHub issue to adopt (full mode only); creates a worktree and opens a PR",
+    )
+    parser.add_argument(
+        "--worktrees-dir",
+        type=Path,
+        default=None,
+        help="directory for per-ticket git worktrees (default: <target>/.worktrees)",
     )
     parser.add_argument(
         "--session-id",

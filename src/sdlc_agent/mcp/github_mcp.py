@@ -13,7 +13,10 @@ from sdlc_agent.mcp.github import (
     GitHubIssueDraft,
     GitHubProjectError,
     GitHubProjectItem,
+    GitHubPullRequest,
     GitHubSpecDocument,
+    issue_number_from_project_item_id,
+    parse_acceptance_criteria_from_issue_body,
 )
 from sdlc_agent.mcp.stdio import MCPToolClient
 
@@ -115,10 +118,10 @@ class GitHubMCPProjectClient:
         return self.update_project_status(f"ISSUE_{issue.number}", status)
 
     def get_project_item(self, item_id: str) -> GitHubProjectItem:
-        return _issue_to_lifecycle_item(self.get_issue(_issue_number_from_item_id(item_id)))
+        return _issue_to_lifecycle_item(self.get_issue(issue_number_from_project_item_id(item_id)))
 
     def update_project_status(self, item_id: str, status: str) -> GitHubProjectItem:
-        issue_number = _issue_number_from_item_id(item_id)
+        issue_number = issue_number_from_project_item_id(item_id)
         current = self.get_issue(issue_number)
         labels = _labels_without_status(current.labels)
         labels.append(_status_label(status))
@@ -154,6 +157,29 @@ class GitHubMCPProjectClient:
             },
         )
         return _normalize_issue(_unwrap(payload), fallback_state="closed")
+
+    def create_pull_request(
+        self,
+        *,
+        title: str,
+        body: str = "",
+        head: str,
+        base: str,
+        draft: bool = False,
+    ) -> GitHubPullRequest:
+        payload = self.tool_client.call_tool(
+            "create_pull_request",
+            {
+                "owner": self.owner,
+                "repo": self.repository,
+                "title": title,
+                "body": body,
+                "head": head,
+                "base": base,
+                "draft": draft,
+            },
+        )
+        return _normalize_pull_request(_unwrap(payload))
 
     def close(self) -> None:
         self.tool_client.close()
@@ -237,6 +263,10 @@ def _normalize_issue(
     number = data.get("number") or _issue_number_from_url(url)
     if number is None:
         raise GitHubProjectError(f"issue number missing from MCP response: {data!r}")
+    ac_list = list(acceptance_criteria or data.get("acceptance_criteria") or [])
+    if not ac_list:
+        body_str = str(data.get("body") or fallback_body or "")
+        ac_list = parse_acceptance_criteria_from_issue_body(body_str)
     return GitHubIssue(
         number=int(number),
         title=str(data.get("title") or fallback_title),
@@ -244,7 +274,7 @@ def _normalize_issue(
         url=url,
         state=str(data.get("state") or fallback_state),
         labels=normalized_labels,
-        acceptance_criteria=list(acceptance_criteria or data.get("acceptance_criteria") or []),
+        acceptance_criteria=ac_list,
     )
 
 
@@ -263,11 +293,23 @@ def _issue_number_from_url(url: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _issue_number_from_item_id(item_id: str) -> int:
-    match = re.fullmatch(r"ISSUE_(\d+)", item_id)
-    if not match:
-        raise GitHubProjectError(f"issue item id expected in form ISSUE_<number>: {item_id!r}")
-    return int(match.group(1))
+def _pull_number_from_url(url: str) -> int | None:
+    match = re.search(r"/pull/(\d+)(?:$|[?#])", url)
+    return int(match.group(1)) if match else None
+
+
+def _normalize_pull_request(data: dict[str, Any]) -> GitHubPullRequest:
+    url = str(data.get("url") or data.get("html_url") or "")
+    number = data.get("number") or _pull_number_from_url(url)
+    if number is None:
+        raise GitHubProjectError(f"pull request number missing from MCP response: {data!r}")
+    return GitHubPullRequest(
+        number=int(number),
+        title=str(data.get("title") or ""),
+        url=url,
+        state=str(data.get("state") or "open"),
+        draft=bool(data.get("draft")),
+    )
 
 
 def _status_label(status: str) -> str:

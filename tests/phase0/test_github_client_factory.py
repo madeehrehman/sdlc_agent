@@ -8,7 +8,7 @@ import pytest
 
 from sdlc_agent.config import DeepAgentConfig, GitHubConfig, ProjectConfig
 from sdlc_agent.mcp.factory import build_github_project_client
-from sdlc_agent.mcp.github import FixtureGitHubProject, GitHubProjectError
+from sdlc_agent.mcp.github import FixtureGitHubProject, GitHubIssueDraft, GitHubProjectError
 from sdlc_agent.mcp.github_mcp import GitHubMCPProjectClient
 
 
@@ -75,7 +75,13 @@ def test_factory_builds_mcp_client_and_validates_tools(tmp_path: Path) -> None:
     def tool_client_factory(launch):
         captured["launch"] = launch
         return FakeToolClient(
-            ["get_file_contents", "issue_write", "issue_read", "list_issues"]
+            [
+                "get_file_contents",
+                "issue_write",
+                "issue_read",
+                "list_issues",
+                "create_pull_request",
+            ]
         )
 
     cfg = DeepAgentConfig(
@@ -96,7 +102,40 @@ def test_factory_builds_mcp_client_and_validates_tools(tmp_path: Path) -> None:
 
     assert isinstance(client, GitHubMCPProjectClient)
     assert captured["launch"].env["GITHUB_PERSONAL_ACCESS_TOKEN"] == "secret-token"
-    assert captured["launch"].env["GITHUB_TOOLSETS"] == "repos,issues"
+    assert captured["launch"].env["GITHUB_TOOLSETS"] == "repos,issues,pull_requests"
+
+
+def test_factory_accepts_namespaced_create_pull_request_tool_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    def tool_client_factory(launch):
+        return FakeToolClient(
+            [
+                "get_file_contents",
+                "issue_write",
+                "issue_read",
+                "list_issues",
+                "pull_requests/create_pull_request",
+            ]
+        )
+
+    cfg = DeepAgentConfig(
+        project=ProjectConfig(name="target", repo_root=tmp_path),
+        github=GitHubConfig(
+            repository="target",
+            owner="madeehrehman",
+            project_name="target",
+            lifecycle_client="mcp",
+        ),
+    )
+
+    client = build_github_project_client(
+        cfg,
+        github_token="secret-token",
+        tool_client_factory=tool_client_factory,
+    )
+
+    assert isinstance(client, GitHubMCPProjectClient)
 
 
 def test_factory_closes_mcp_tool_client_when_required_tools_missing(tmp_path: Path) -> None:
@@ -144,3 +183,11 @@ def test_factory_closes_mcp_tool_client_when_tool_validation_errors(tmp_path: Pa
         )
 
     assert fake_tool_client.closed is True
+
+
+def test_fixture_create_pull_request(tmp_path: Path) -> None:
+    gh = FixtureGitHubProject(repo_root=tmp_path)
+    gh.create_issue(GitHubIssueDraft(title="Issue", body="Body", acceptance_criteria=["one"]))
+    pr = gh.create_pull_request(title="PR", body="Hi", head="feat", base="develop")
+    assert pr.number == 1
+    assert "/pull/1" in pr.url

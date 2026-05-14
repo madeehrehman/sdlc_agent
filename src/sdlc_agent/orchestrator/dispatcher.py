@@ -7,7 +7,8 @@ mocked) implement the same minimal protocol: ``run(assignment) -> ArtifactReturn
 from __future__ import annotations
 
 import uuid
-from typing import Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Callable, Protocol, runtime_checkable
 
 from sdlc_agent.config import GateConfig
 from sdlc_agent.contracts import (
@@ -67,6 +68,14 @@ class OrchestratorError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class OrchestratorHooks:
+    """Optional callbacks after automated gates proceed (issue-driven PR flow)."""
+
+    after_development_gate_proceed: Callable[[TicketState], None] | None = None
+    after_review_gate_proceed: Callable[[TicketState], None] | None = None
+
+
 class Orchestrator:
     """Drives a ticket through the SDLC, persisting state at every transition."""
 
@@ -81,6 +90,7 @@ class Orchestrator:
         curation: CurationGate | None = None,
         session_id: str | None = None,
         github: GitHubProjectClient | None = None,
+        hooks: OrchestratorHooks | None = None,
     ) -> None:
         self.paths = paths
         self.registry = registry
@@ -91,6 +101,7 @@ class Orchestrator:
         self.curation = curation or CurationGate(self.memory)
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.github = github
+        self.hooks = hooks
 
     # ---------------------------------------------------------------- intake
     def intake(
@@ -114,7 +125,12 @@ class Orchestrator:
             current_phase=SDLCPhase.INTAKE,
             ticket_inputs=dict(ticket_inputs or {}),
         )
-        state.record_transition(SDLCPhase.REQUIREMENTS_ANALYSIS, rationale="intake")
+        inputs = state.ticket_inputs
+        skip = bool(inputs.get("skip_requirements_analysis"))
+        if skip:
+            state.record_transition(SDLCPhase.DEVELOPMENT, rationale="issue-driven intake")
+        else:
+            state.record_transition(SDLCPhase.REQUIREMENTS_ANALYSIS, rationale="intake")
         self.memory.save_ticket_state(state)
         self._log_episode("transition", state, state.history[-1])
         return state
@@ -150,7 +166,10 @@ class Orchestrator:
 
         phase = state.current_phase
         if phase is SDLCPhase.INTAKE:
-            state.record_transition(SDLCPhase.REQUIREMENTS_ANALYSIS, rationale="intake")
+            if state.ticket_inputs.get("skip_requirements_analysis"):
+                state.record_transition(SDLCPhase.DEVELOPMENT, rationale="intake")
+            else:
+                state.record_transition(SDLCPhase.REQUIREMENTS_ANALYSIS, rationale="intake")
         elif phase in WORK_PHASES:
             self._dispatch_work_phase(state, phase)
         elif phase in GATE_PHASES:
@@ -234,6 +253,11 @@ class Orchestrator:
 
         record = state.record_transition(next_phase, decision=decision, rationale=rationale)
         self._log_episode("gate", state, record)
+        if decision is GateDecision.PROCEED and self.hooks is not None:
+            if gate is SDLCPhase.DEVELOPMENT_GATE and self.hooks.after_development_gate_proceed:
+                self.hooks.after_development_gate_proceed(state)
+            if gate is SDLCPhase.REVIEW_GATE and self.hooks.after_review_gate_proceed:
+                self.hooks.after_review_gate_proceed(state)
         self._sync_github_lifecycle(state, next_phase)
 
     def _gate_requires_human(self, gate: SDLCPhase) -> bool:

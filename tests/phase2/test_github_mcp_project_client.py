@@ -21,7 +21,13 @@ class RecordingMCPToolClient:
         return HandshakeResult(ok=True, server=self.server_name, transport="fake")
 
     def list_tools(self) -> list[str]:
-        return ["get_file_contents", "issue_write", "issue_read", "list_issues"]
+        return [
+            "get_file_contents",
+            "issue_write",
+            "issue_read",
+            "list_issues",
+            "create_pull_request",
+        ]
 
     def call_tool(self, name: str, arguments: dict) -> dict:
         self.calls.append((name, arguments))
@@ -279,3 +285,37 @@ def test_close_issue_updates_issue_state() -> None:
             },
         )
     ]
+
+
+def test_create_pull_request_invokes_mcp_tool() -> None:
+    from sdlc_agent.mcp.github import GitHubPullRequest
+
+    fake = RecordingMCPToolClient(
+        {
+            ("create_pull_request", None): {
+                "number": 77,
+                "title": "My PR",
+                "html_url": "https://github.com/madeehrehman/sdlc_agent_tictactoe/pull/77",
+            }
+        }
+    )
+    pr = _client(fake).create_pull_request(
+        title="My PR",
+        body="desc",
+        head="feature",
+        base="develop",
+    )
+    assert isinstance(pr, GitHubPullRequest)
+    assert pr.number == 77
+    assert pr.url.endswith("/pull/77")
+    assert fake.calls[-1][0] == "create_pull_request"
+    assert fake.calls[-1][1]["head"] == "feature"
+
+
+def test_normalize_pull_request_derives_number_from_url() -> None:
+    from sdlc_agent.mcp.github_mcp import _normalize_pull_request
+
+    pr = _normalize_pull_request(
+        {"title": "t", "html_url": "https://github.com/o/r/pull/99", "draft": False}
+    )
+    assert pr.number == 99

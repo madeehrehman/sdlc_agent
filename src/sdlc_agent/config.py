@@ -63,7 +63,7 @@ class GitHubMCPRuntimeConfig(BaseModel):
     """Non-secret settings for launching the official GitHub MCP server."""
 
     docker_image: str = "ghcr.io/github/github-mcp-server"
-    toolsets: list[str] = Field(default_factory=lambda: ["repos", "issues"])
+    toolsets: list[str] = Field(default_factory=lambda: ["repos", "issues", "pull_requests"])
     timeout_seconds: float = 30.0
 
 

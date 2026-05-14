@@ -23,7 +23,13 @@ REQUIRED_GITHUB_MCP_TOOLS = {
     "issue_write",
     "issue_read",
     "list_issues",
+    "create_pull_request",
 }
+
+
+def _normalized_github_tool_names(tools: list[str]) -> set[str]:
+    """Map MCP tool names like ``pull_requests/create_pull_request`` to basenames."""
+    return {name.split("/")[-1] for name in tools}
 
 
 def build_github_project_client(
@@ -62,7 +68,9 @@ def build_github_project_client(
     )
     tool_client = factory(launch)
     try:
-        missing = REQUIRED_GITHUB_MCP_TOOLS.difference(tool_client.list_tools())
+        missing = REQUIRED_GITHUB_MCP_TOOLS.difference(
+            _normalized_github_tool_names(tool_client.list_tools())
+        )
     except Exception as e:
         with suppress(Exception):
             tool_client.close()
