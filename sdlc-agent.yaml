@@ -1,6 +1,6 @@
 target:
   repo_url: https://github.com/madeehrehman/sdlc_agent_tictactoe
-  specs_path: spec.md
+  specs_path: specs.md
 
 github:
   lifecycle_client: mcp
@@ -14,6 +14,7 @@ github:
       - repos
       - issues
       - projects
+    owner_type: user
     status_field_name: Status
     timeout_seconds: 30
 

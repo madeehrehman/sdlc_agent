@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from pathlib import Path
 from typing import Callable
 
@@ -65,10 +66,12 @@ def build_github_project_client(
     try:
         missing = REQUIRED_GITHUB_MCP_TOOLS.difference(tool_client.list_tools())
     except Exception as e:
-        tool_client.close()
+        with suppress(Exception):
+            tool_client.close()
         raise GitHubProjectError(str(e)) from e
     if missing:
-        tool_client.close()
+        with suppress(Exception):
+            tool_client.close()
         raise GitHubProjectError(
             "missing required GitHub MCP tools: " + ", ".join(sorted(missing))
         )
@@ -80,5 +83,6 @@ def build_github_project_client(
         project_name=github.project_name,
         project_number=github.mcp.project_number,
         specs_ref=github.main_branch,
+        owner_type=github.mcp.owner_type,
         status_field_name=github.mcp.status_field_name,
     )

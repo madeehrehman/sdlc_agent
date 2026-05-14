@@ -65,6 +65,7 @@ class GitHubMCPRuntimeConfig(BaseModel):
     docker_image: str = "ghcr.io/github/github-mcp-server"
     toolsets: list[str] = Field(default_factory=lambda: ["repos", "issues", "projects"])
     project_number: int | None = None
+    owner_type: Literal["user", "org"] = "user"
     status_field_name: str = "Status"
     timeout_seconds: float = 30.0
 

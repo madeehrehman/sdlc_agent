@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,6 +34,7 @@ class GitHubMCPProjectClient:
     project_name: str
     project_number: int | None = None
     specs_ref: str | None = None
+    owner_type: str = "user"
     status_field_name: str = "Status"
     server_name: str = "github-mcp-project"
     _status_field: _StatusField | None = field(default=None, init=False, repr=False)
@@ -64,6 +66,7 @@ class GitHubMCPProjectClient:
             args: dict[str, Any] = {
                 "method": "list_project_items",
                 "owner": self.owner,
+                "owner_type": self.owner_type,
                 "project_number": project_number,
                 "fields": [status_field.field_id],
                 "per_page": 50,
@@ -97,7 +100,9 @@ class GitHubMCPProjectClient:
         )
         return _normalize_issue(
             _unwrap(payload),
+            fallback_title=parsed.title,
             fallback_body=body,
+            fallback_labels=list(parsed.labels),
             acceptance_criteria=list(parsed.acceptance_criteria),
         )
 
@@ -111,7 +116,7 @@ class GitHubMCPProjectClient:
                 "issue_number": number,
             },
         )
-        return _normalize_issue(_unwrap(payload))
+        return _normalize_issue(_unwrap(payload), fallback_state="closed")
 
     def add_issue_to_project(
         self, issue: GitHubIssue, *, status: str = "Backlog"
@@ -123,6 +128,7 @@ class GitHubMCPProjectClient:
             {
                 "method": "add_project_item",
                 "owner": self.owner,
+                "owner_type": self.owner_type,
                 "project_number": project_number,
                 "item_owner": self.owner,
                 "item_repo": self.repository,
@@ -154,6 +160,7 @@ class GitHubMCPProjectClient:
             {
                 "method": "get_project_item",
                 "owner": self.owner,
+                "owner_type": self.owner_type,
                 "project_number": self._project_number(),
                 "item_id": _coerce_numeric_id(item_id, "project item id"),
             },
@@ -169,6 +176,7 @@ class GitHubMCPProjectClient:
             {
                 "method": "update_project_item",
                 "owner": self.owner,
+                "owner_type": self.owner_type,
                 "project_number": project_number,
                 "item_id": _coerce_numeric_id(item_id, "project item id"),
                 "updated_field": {
@@ -214,6 +222,7 @@ class GitHubMCPProjectClient:
             {
                 "method": "list_projects",
                 "owner": self.owner,
+                "owner_type": self.owner_type,
                 "query": self.project_name,
             },
         )
@@ -234,6 +243,7 @@ class GitHubMCPProjectClient:
             {
                 "method": "list_project_fields",
                 "owner": self.owner,
+                "owner_type": self.owner_type,
                 "project_number": self._project_number(),
             },
         )
@@ -341,23 +351,35 @@ def _coerce_numeric_id(value: Any, label: str) -> int:
 def _normalize_issue(
     data: dict[str, Any],
     *,
+    fallback_title: str = "",
     fallback_body: str | None = None,
+    fallback_labels: list[str] | None = None,
+    fallback_state: str = "open",
     acceptance_criteria: list[str] | None = None,
 ) -> GitHubIssue:
-    labels = data.get("labels") or []
+    labels = data.get("labels") or fallback_labels or []
     normalized_labels = [
         str(label.get("name")) if isinstance(label, dict) else str(label)
         for label in labels
     ]
+    url = str(data.get("url") or data.get("html_url") or "")
+    number = data.get("number") or _issue_number_from_url(url)
+    if number is None:
+        raise GitHubProjectError(f"issue number missing from MCP response: {data!r}")
     return GitHubIssue(
-        number=int(data["number"]),
-        title=str(data.get("title") or ""),
+        number=int(number),
+        title=str(data.get("title") or fallback_title),
         body=str(data.get("body") or fallback_body or ""),
-        url=str(data.get("url") or data.get("html_url") or ""),
-        state=str(data.get("state") or "open"),
+        url=url,
+        state=str(data.get("state") or fallback_state),
         labels=normalized_labels,
         acceptance_criteria=list(acceptance_criteria or data.get("acceptance_criteria") or []),
     )
+
+
+def _issue_number_from_url(url: str) -> int | None:
+    match = re.search(r"/issues/(\d+)(?:$|[?#])", url)
+    return int(match.group(1)) if match else None
 
 
 def _render_issue_body(draft: GitHubIssueDraft) -> str:

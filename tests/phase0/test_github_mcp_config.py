@@ -22,6 +22,7 @@ def test_root_config_defaults_github_mcp_runtime_fields(tmp_path: Path) -> None:
     assert cfg.github.lifecycle_client == "mcp"
     assert cfg.github.mcp.docker_image == "ghcr.io/github/github-mcp-server"
     assert cfg.github.mcp.toolsets == ["repos", "issues", "projects"]
+    assert cfg.github.mcp.owner_type == "user"
     assert cfg.github.mcp.status_field_name == "Status"
     assert cfg.github.mcp.timeout_seconds == 30.0
 

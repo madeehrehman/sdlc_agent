@@ -4,14 +4,14 @@ These tests intentionally mutate GitHub only when run with:
 
     python -m pytest --run-live -m "github_live"
 
-They require OPENAI_API_KEY because `live` tests are globally gated that way,
-plus GITHUB_TOKEN, Docker, and a root sdlc-agent.yaml.
+They require GITHUB_TOKEN, Docker, and a root sdlc-agent.yaml.
 """
 
 from __future__ import annotations
 
 import shutil
 import os
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -23,12 +23,23 @@ from sdlc_agent.mcp.github import GitHubIssueDraft
 from sdlc_agent.mcp.github_mcp import GitHubMCPProjectClient
 
 
-def _live_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GitHubMCPProjectClient:
+def _live_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[GitHubMCPProjectClient, str]:
     root_cfg_path = Path("sdlc-agent.yaml")
     if not root_cfg_path.is_file():
         pytest.skip("sdlc-agent.yaml is required for GitHub MCP live tests")
     if shutil.which("docker") is None:
         pytest.skip("Docker is required for GitHub MCP live tests")
+    docker_info = subprocess.run(
+        ["docker", "info"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if docker_info.returncode != 0:
+        pytest.skip("Docker daemon is required for GitHub MCP live tests")
     if not os.environ.get("GITHUB_TOKEN"):
         pytest.skip("GITHUB_TOKEN is required for GitHub MCP live tests")
     monkeypatch.setenv("GITHUB_LIVE_TEST", "1")
@@ -36,19 +47,19 @@ def _live_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GitHubMCPPr
     client = build_github_project_client(cfg)
     if not isinstance(client, GitHubMCPProjectClient):
         pytest.skip("root config is not using GitHub MCP lifecycle mode")
-    return client
+    return client, cfg.github.specs_path
 
 
 @pytest.mark.live
 @pytest.mark.github_live
 def test_live_github_mcp_reads_specs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _live_client(tmp_path, monkeypatch)
+    client, specs_path = _live_client(tmp_path, monkeypatch)
     try:
-        spec = client.read_specs("spec.md")
+        spec = client.read_specs(specs_path)
     finally:
         client.close()
 
-    assert spec.path.endswith("spec.md")
+    assert spec.path.endswith(specs_path)
     assert spec.body.strip()
 
 
@@ -58,7 +69,7 @@ def test_live_github_mcp_issue_project_round_trip(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = _live_client(tmp_path, monkeypatch)
+    client, _specs_path = _live_client(tmp_path, monkeypatch)
     unique = uuid.uuid4().hex[:8]
     issue_number: int | None = None
     try:

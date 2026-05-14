@@ -10,9 +10,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+from dotenv import load_dotenv
 
 from sdlc_agent.llm.openai_client import OpenAIClient
 from sdlc_agent.mcp.github import FixtureGitHubProject
+
+
+load_dotenv()
 
 
 # ----------------------------------------------------------------- live opt-in

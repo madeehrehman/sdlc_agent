@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
@@ -112,7 +112,8 @@ class MCPStdioToolClient:
 
     def close(self) -> None:
         if self._stack is not None:
-            self._run(self._stack.aclose())
+            with suppress(Exception):
+                self._run(self._stack.aclose())
             self._stack = None
             self._session = None
         if not self._loop.is_closed():
@@ -127,11 +128,10 @@ class MCPStdioToolClient:
 
     def _close_after_failed_start(self) -> None:
         if self._stack is not None:
-            try:
+            with suppress(Exception):
                 self._loop.run_until_complete(self._stack.aclose())
-            finally:
-                self._stack = None
-                self._session = None
+            self._stack = None
+            self._session = None
 
     async def _ensure_started(self) -> None:
         if self._session is not None:

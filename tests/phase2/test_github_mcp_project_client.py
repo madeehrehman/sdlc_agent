@@ -105,6 +105,30 @@ def test_create_issue_renders_acceptance_criteria_and_normalizes_issue() -> None
     assert "## Acceptance Criteria" in fake.calls[0][1]["body"]
 
 
+def test_create_issue_derives_number_from_url_when_mcp_omits_number() -> None:
+    fake = RecordingMCPToolClient(
+        {
+            ("issue_write", "create"): {
+                "id": "4449631857",
+                "url": "https://github.com/madeehrehman/sdlc_agent_tictactoe/issues/17",
+            }
+        }
+    )
+
+    issue = _client(fake).create_issue(
+        GitHubIssueDraft(
+            title="Live-shaped issue",
+            body="Body",
+            acceptance_criteria=["AC"],
+            labels=["sdlc-agent-live-test"],
+        )
+    )
+
+    assert issue.number == 17
+    assert issue.title == "Live-shaped issue"
+    assert issue.labels == ["sdlc-agent-live-test"]
+
+
 def test_add_issue_to_project_adds_item_and_sets_status() -> None:
     fake = RecordingMCPToolClient(
         {
@@ -142,6 +166,7 @@ def test_add_issue_to_project_adds_item_and_sets_status() -> None:
         {
             "method": "add_project_item",
             "owner": "madeehrehman",
+                "owner_type": "user",
             "project_number": 7,
             "item_owner": "madeehrehman",
             "item_repo": "sdlc_agent_tictactoe",
@@ -189,6 +214,7 @@ def test_project_number_can_be_discovered_by_project_name() -> None:
         {
             "method": "list_projects",
             "owner": "madeehrehman",
+                "owner_type": "user",
             "query": "sdlc_agent_tictactoe",
         },
     )
@@ -197,6 +223,7 @@ def test_project_number_can_be_discovered_by_project_name() -> None:
         {
             "method": "list_project_items",
             "owner": "madeehrehman",
+            "owner_type": "user",
             "project_number": 7,
             "fields": ["99"],
             "per_page": 50,
