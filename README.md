@@ -25,6 +25,8 @@ Per ticket, the orchestrator runs:
 
 `INTAKE` → **Requirements analysis** from `specs.md` (optional skip for issue-driven runs) → gate → **Development** (DeveloperTester, TDD in sandbox or issue worktree) → gate → **PR review** → gate → `DONE`
 
+The FSM owns phase transitions. Optionally, an **orchestrator supervisor LLM** (`orchestrator.use_llm_supervisor`) plans delegation instructions and advises gate decisions; hard rules still clamp unsafe `proceed` recommendations (see `ARCHITECTURE.md` §2, `system-design.md` §7.1).
+
 `BacklogAnalyzer` reads `specs.md`, compares it with existing GitHub Issues,
 creates issues with acceptance criteria, and returns metadata to the orchestrator.
 Issue-driven **`full`** and **`daemon`** modes adopt an existing issue, implement
@@ -34,6 +36,7 @@ GitHub MCP when configured.
 ## Features
 
 - Explicit SDLC FSM with `PROCEED` / `RETRY` / `BLOCKED` / `NEEDS_HUMAN` routing.
+- Optional **supervisor LLM** for protocol-aware planning and gate advice (hybrid with FSM safety clamps).
 - GitHub-native backlog and lifecycle: `specs.md` → GitHub Issues with `status:*` labels.
 - Managed target clone (optional) or explicit `--target-repo-root`.
 - Issue-driven runs: worktree + branch, commit/push, `create_pull_request` (MCP).
@@ -89,7 +92,13 @@ github:
       - repos
       - issues
       - pull_requests   # required for automated PR creation
+
+# Optional: LLM supervisor plans delegation and advises gates (FSM still authoritative)
+# orchestrator:
+#   use_llm_supervisor: true
 ```
+
+Uses `model.roles.orchestrator` when the supervisor is enabled. Protocol skill: `skills/orchestrator-supervisor.md`.
 
 `.deepagent/config.yaml` stores the derived target repo metadata, model
 settings, GitHub issue lifecycle settings, and gate options **inside the local
@@ -215,7 +224,7 @@ present. Live GitHub MCP tests also require `GITHUB_TOKEN`, Docker, and
 |------|------|
 | `sdlc-agent.yaml` | Control-plane config: target repo URL, models, GitHub MCP |
 | `src/sdlc_agent/contracts/` | `TaskAssignment` and `ArtifactReturn` |
-| `src/sdlc_agent/orchestrator/` | FSM, dispatcher (+ `OrchestratorHooks`), curation, HITL |
+| `src/sdlc_agent/orchestrator/` | FSM, dispatcher (+ `OrchestratorHooks`), `OrchestratorSupervisor`, curation, HITL |
 | `src/sdlc_agent/memory/` | `.deepagent/` paths, stores, trajectories |
 | `src/sdlc_agent/mcp/` | GitHub fixture + MCP, stdio transport, `LocalGitClient` |
 | `src/sdlc_agent/target_clone.py` | Managed clone under temp (or `SDLC_TARGET_CLONE_PARENT`) |
@@ -225,7 +234,7 @@ present. Live GitHub MCP tests also require `GITHUB_TOKEN`, Docker, and
 | `src/sdlc_agent/runtime.py` | Assemble clients, registry, orchestrator |
 | `src/sdlc_agent/cli.py` | `sdlc-agent` entrypoint |
 | `src/sdlc_agent/subagents/` | BacklogAnalyzer, DeveloperTester, PRReviewer |
-| `skills/` | Shared markdown skills (control repo) |
+| `skills/` | Shared markdown skills (incl. `orchestrator-supervisor.md` when LLM supervisor on) |
 | `scripts/demo.py` | Fixture demo without MCP clone |
 | `ARCHITECTURE.md` | Tradeoffs and extension seams |
 | `system-design.md` | Mermaid diagrams for current system |

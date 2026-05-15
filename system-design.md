@@ -32,6 +32,7 @@ flowchart TB
 
   subgraph Process["Orchestration in-process"]
     ORCH["Orchestrator dispatcher + FSM"]
+    SUP["OrchestratorSupervisor LLM optional"]
     CG["CurationGate"]
     GA["GateApprover"]
     HOOKS["OrchestratorHooks commit push PR"]
@@ -44,6 +45,8 @@ flowchart TB
     end
     REG["Subagent registry"]
     ORCH --> REG
+    ORCH -. plan + gate advice .-> SUP
+    SUP --> OAI
     ORCH --> CG
     ORCH --> GA
     ORCH --> HOOKS
@@ -53,6 +56,7 @@ flowchart TB
     LOAD -. system prompt .-> BA
     LOAD -. system prompt .-> DV
     LOAD -. system prompt .-> PR
+    LOAD -. orchestrator-supervisor.md .-> SUP
   end
 
   subgraph TargetCheckout["Target checkout disk"]
@@ -94,7 +98,7 @@ flowchart TB
   HM -. GateApprover .-> GA
 ```
 
-**Legend:** The operator runs the CLI from the control repo. The target checkout is either `--target-repo-root` or an auto-managed clone under `%TEMP%/sdlc-agent-targets/` (see `target_clone.py`). Subagents never read `.deepagent/` directly.
+**Legend:** The operator runs the CLI from the control repo. The target checkout is either `--target-repo-root` or an auto-managed clone under `%TEMP%/sdlc-agent-targets/` (see `target_clone.py`). Subagents never read `.deepagent/` directly. When `orchestrator.use_llm_supervisor` is true, `OrchestratorSupervisor` plans delegation and advises gates; the FSM still applies safety clamps (see §7.1).
 
 ---
 
@@ -152,6 +156,8 @@ flowchart LR
 | `full` + `--issue-number` | Skip requirements phase; worktree; commit/push; `create_pull_request` |
 | `daemon` | Repeat issue-driven `full` until queue empty or `--max-issues` |
 
+**Config (optional):** `orchestrator.use_llm_supervisor: true` in `sdlc-agent.yaml` enables the supervisor LLM (`model.roles.orchestrator`). Default is `false` (rules-only gates).
+
 ---
 
 ## 4. Issue-driven sequence (worktree → PR)
@@ -204,6 +210,7 @@ flowchart LR
   subgraph Orchestrator_pkg["orchestrator/"]
     SM[state_machine.py]
     DP[dispatcher.py + OrchestratorHooks]
+    SUP2[supervisor.py + prompts.py]
     CU[curation.py]
     HI[hitl.py]
   end
@@ -236,6 +243,8 @@ flowchart LR
   RUN2 --> GHM
   FAC --> GHM
   DP --> SM
+  DP -. optional .-> SUP2
+  SUP2 --> LLM
   DP --> CU
   DP --> HI
   DP --> STO
@@ -324,7 +333,41 @@ stateDiagram-v2
   NEEDS_HUMAN --> [*]
 ```
 
-Gate decisions: `proceed`, `retry`, `blocked`, `needs_human` (`state_machine.py`).
+Gate decisions: `proceed`, `retry`, `blocked`, `needs_human` (`state_machine.py`). With the supervisor enabled, the LLM *recommends* a decision; `evaluate_default_gate` plus verification clamps still bound what the FSM can accept.
+
+---
+
+## 7.1 Supervisor LLM (hybrid orchestration)
+
+When `orchestrator.use_llm_supervisor` is true, each work phase and gate consults `OrchestratorSupervisor` before the subagent runs and before the gate transition is recorded.
+
+```mermaid
+flowchart TD
+  WORK[Work phase e.g. DEVELOPMENT]
+  PLAN[supervisor.plan_delegation if enabled]
+  ASSIGN[TaskAssignment + supervisor instructions]
+  SUB[subagent.run]
+  GATE[Gate phase]
+  HITL{HITL configured?}
+  HUM[GateApprover human only]
+  DEF[evaluate_default_gate]
+  ADV[supervisor.advise_gate if enabled]
+  CLAMP[Clamp: cannot proceed if default blocks or verify failed]
+  TRANS[FSM record_transition]
+
+  WORK --> PLAN --> ASSIGN --> SUB --> GATE
+  GATE --> HITL
+  HITL -->|yes| HUM --> TRANS
+  HITL -->|no| DEF --> ADV --> CLAMP --> TRANS
+```
+
+| Step | Owner | Notes |
+|------|--------|--------|
+| Phase transitions | FSM (`state_machine.py`) | Single source of truth for `current_phase` |
+| Delegation text | Supervisor LLM | Scoped to ticket inputs, prior artifacts, retry guidance |
+| Gate decision | Supervisor + rules | Cannot `proceed` if `verification.passed` is false or default would block |
+| HITL | `GateApprover` | Supervisor skipped; human decides |
+| Protocol | `skills/orchestrator-supervisor.md` | Loaded with `orchestrator/prompts.py` system prompt |
 
 ---
 

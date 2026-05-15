@@ -2,7 +2,7 @@
 
 > **How to use this document.** This is both a design spec and an IDE build prompt. Paste it whole into your coding agent as the anchoring context, then drive the build phase by phase (Section 11). Each phase is independently testable. The architecture is fixed; the tech stack in Section 9 separates *recommended* swaps from the *reference implementation* in this repo.
 
-> **Implementation alignment (reference repo).** Sections 1–8 and 13 describe the **architecture** (load-bearing invariants). Sections 9–11 document how the **current Python package** (`sdlc_agent`) realizes it: vanilla FSM orchestration (not LangGraph), OpenAI structured outputs, GitHub Issues + PRs via fixture or GitHub MCP (stdio/Docker), `LocalGitClient` for diff/worktree/commit/push, `LocalSubprocessSandbox` for DeveloperTester, skills under `skills/`, trajectories under `.deepagent/trajectories/<session-id>/`, operator layers (`runner.py`, `daemon.py`, `target_clone.py`, `cli.py`), and issue-driven full runs (worktree, commit/push, `create_pull_request`). The **control repo** holds `sdlc-agent.yaml`; the **target checkout** (managed clone or `--target-repo-root`) holds code and `.deepagent/`. See `README.md`, `ARCHITECTURE.md`, and `system-design.md`.
+> **Implementation alignment (reference repo).** Sections 1–8 and 13 describe the **architecture** (load-bearing invariants). Sections 9–11 document how the **current Python package** (`sdlc_agent`) realizes it: vanilla FSM orchestration (not LangGraph) with an optional **hybrid supervisor LLM** (`OrchestratorSupervisor` when `orchestrator.use_llm_supervisor` is true), OpenAI structured outputs, GitHub Issues + PRs via fixture or GitHub MCP (stdio/Docker), `LocalGitClient` for diff/worktree/commit/push, `LocalSubprocessSandbox` for DeveloperTester, skills under `skills/`, trajectories under `.deepagent/trajectories/<session-id>/`, operator layers (`runner.py`, `daemon.py`, `target_clone.py`, `cli.py`), and issue-driven full runs (worktree, commit/push, `create_pull_request`). The **control repo** holds `sdlc-agent.yaml`; the **target checkout** (managed clone or `--target-repo-root`) holds code and `.deepagent/`. See `README.md`, `ARCHITECTURE.md`, and `system-design.md`.
 
 ---
 
@@ -36,11 +36,17 @@ These are load-bearing. Every component decision traces back to one of them.
 
 Owns:
 - The **SDLC state machine** (Section 4) — the single source of truth for "what phase is this ticket in."
-- The **planning tool** — long-horizon plan across SDLC phases.
+- The **planning tool** — long-horizon plan across SDLC phases (rules-only by default; optional **supervisor LLM** when enabled).
 - **Project memory** on the filesystem — read and write authority (Section 5).
 - **Memory curation** — the promotion gate from proposed → durable.
 - **Human-in-the-loop gates** — pausing for approval at defined checkpoints.
 - **GitHub Issues** (issue lifecycle) and coordination with **local git** (via runner hooks on issue-driven paths: worktree, commit, push, open PR).
+
+**Reference implementation — hybrid supervisor.** When `orchestrator.use_llm_supervisor: true` in `sdlc-agent.yaml`, `OrchestratorSupervisor` (`orchestrator/supervisor.py`) uses the `orchestrator` model role to:
+1. **`plan_delegation`** — produce scoped `task_instructions` appended to each `TaskAssignment.task` before subagent dispatch.
+2. **`advise_gate`** — recommend `proceed` / `retry` / `blocked` / `needs_human` at each gate.
+
+The FSM dispatcher still records transitions. Safety clamps prevent the supervisor from `proceed` when `evaluate_default_gate` would `block` or `needs_human`, or when `verification.passed` is false. HITL gates bypass the supervisor. Protocol: `skills/orchestrator-supervisor.md` + `orchestrator/prompts.py`. Episodic kinds: `supervisor_delegation`, `supervisor_gate`.
 
 Does NOT: write code, generate tests, or review PRs directly. It dispatches and gates. Commit/push and `create_pull_request` are **runner-owned hooks** after development/review gates when `issue_number` is set — not separate subagents.
 
@@ -87,6 +93,8 @@ Because the Developer works test-first, there is no separate test phase or test 
 
 **Gate logic is the orchestrator's intelligence.** A gate is not a pass/fail boolean — it reads the returned artifact's `verification` block, checks it against project memory, and decides. On RETRY, the next assignment is enriched with what failed and why.
 
+**Hybrid mode (reference):** With `use_llm_supervisor`, the supervisor LLM *advises* gate decisions; `evaluate_default_gate` plus verification clamps remain authoritative for unsafe `proceed`. Retry guidance may be stored on `ticket_inputs["supervisor_retry_guidance"]` and included in the next delegation context.
+
 State is persisted to `.deepagent/state/<ticket-id>.json` after every transition so a session can resume mid-lifecycle.
 
 ---
@@ -97,8 +105,9 @@ State is persisted to `.deepagent/state/<ticket-id>.json` after every transition
 
 The SDLC agent system repo has a root `sdlc-agent.yaml` control-plane file. It
 contains non-secret startup settings only: the target GitHub repo URL,
-`specs.md` path, branch names, GitHub lifecycle client mode, and per-role OpenAI
-model choices. `OPENAI_API_KEY` and `GITHUB_TOKEN` stay in `.env`.
+`specs.md` path, branch names, GitHub lifecycle client mode, per-role OpenAI
+model choices, and orchestrator behavior (`orchestrator.use_llm_supervisor`,
+default `false`). `OPENAI_API_KEY` and `GITHUB_TOKEN` stay in `.env`.
 
 On startup, the master agent loads `.env`, then `sdlc-agent.yaml`, parses
 `target.repo_url`, derives the GitHub owner/repository name, resolves a **target
@@ -172,7 +181,7 @@ These are not subagents; they wire config, GitHub, git, and the orchestrator for
 
 | Module | Role |
 |--------|------|
-| `build_sdlc_runtime` | Load config, resolve target checkout, build GitHub + OpenAI clients, subagent registry, `Orchestrator` (+ optional `OrchestratorHooks`, `worktree_root`). |
+| `build_sdlc_runtime` | Load config, resolve target checkout, build GitHub + OpenAI clients (including `orchestrator` role), subagent registry, `Orchestrator` (+ optional `OrchestratorSupervisor`, `OrchestratorHooks`, `worktree_root`). |
 | `run_sdlc_agent` | One ticket: `backlog` (stop at DEVELOPMENT), `full` (ticket FSM to completion), or `full` + `issue_number` (issue-driven worktree, commit/push, PR hooks). |
 | `run_sdlc_daemon` | Loop: dequeue lowest open issue with lifecycle status in queue (default **Backlog**), run issue-driven `full` until empty or `--max-issues`. |
 | `sdlc-agent` CLI | Parses flags; prints `SDLCRunResult` or `DaemonSummary`. |
@@ -220,6 +229,9 @@ The assignment is **stateful by injection**. The orchestrator decides what slice
 | `base_ref`, `head_ref` | PR Reviewer diff (`head_ref` often `HEAD` in worktree) |
 | `github_pr_number`, `github_pr_url` | Set after review-gate PR hook |
 | `release_to_main_accepted` | Close issue on `DONE` when true |
+| `supervisor_retry_guidance` | Set by supervisor on `RETRY`; fed into next delegation context |
+
+When the supervisor is enabled, `TaskAssignment.task` also includes a **Supervisor instructions** section appended by the dispatcher (not a separate contract field).
 
 To keep subagents least-privileged (no read access to `.deepagent/artifacts/`), the orchestrator **inlines** prior artifact bodies: `inputs["requirement_analysis"]` for Developer; `inputs["implementation_summary"]` for PR Reviewer. For issue-driven runs, requirements may be seeded from the GitHub issue body (`issue_workflow.synthetic_requirements_artifact`) before intake. Paths still appear in `injected_context.relevant_artifacts` for audit.
 
@@ -280,8 +292,8 @@ Swap freely at integration boundaries. Below, **Recommended** is the long-term /
 | Concern | Recommended | Reference implementation |
 |--------|---------------|---------------------------|
 | **Language** | Python 3.11+ | Python 3.11+ (`requires-python` in `pyproject.toml`) |
-| **Orchestration** | LangGraph (supervisor, subgraphs, optional checkpointing) | **Vanilla Python FSM** — `SDLCPhase`, pure transition helpers, `Orchestrator.advance()` / `run_to_completion()` |
-| **LLM** | OpenAI or other provider with structured output | **OpenAI** Chat Completions API; `OpenAIClient.complete()` with optional `response_format` JSON Schema (`strict: true`) for subagents; runtime factories route per-role models from `sdlc-agent.yaml` |
+| **Orchestration** | LangGraph (supervisor, subgraphs, optional checkpointing) | **Vanilla Python FSM** — `SDLCPhase`, pure transition helpers, `Orchestrator.advance()` / `run_to_completion()`; optional **`OrchestratorSupervisor`** LLM for delegation + gate advice (FSM clamps) |
+| **LLM** | OpenAI or other provider with structured output | **OpenAI** Chat Completions API; `OpenAIClient.complete()` with optional `response_format` JSON Schema (`strict: true`) for subagents and supervisor; runtime factories route per-role models from `sdlc-agent.yaml` (`orchestrator` role used only when `use_llm_supervisor` is true) |
 | **Persistence** | Plain files under `.deepagent/` | JSON / JSONL / YAML as in §5.1; `MemoryStores` owns all writes except subagent sandboxes |
 | **GitHub lifecycle** | GitHub Issues API or MCP | **`FixtureGitHubProject`** (tests); **`GitHubMCPProjectClient`** (live Issues + **`create_pull_request`**); factory requires MCP tools including `pull_requests` toolset |
 | **Git** | Real git MCP (diff, PR lifecycle) | **`LocalGitClient`** — diff, worktree add/remove, commit, push; **`GitMCPStub`** for handshake only |
@@ -303,8 +315,9 @@ Skills are **shared infrastructure**, not bolted onto one agent. A skill is a re
   - `requirement-ambiguity-checklist.md` (Backlog Analyzer)
   - `tdd-discipline.md` (Developer)
   - `pr-review-rubric.md` (PR Reviewer)
+  - `orchestrator-supervisor.md` (Orchestrator supervisor LLM — SDLC protocol, delegation, gates)
 - **Loading:** **`SkillLoader`** resolves names to file contents (validated names, in-process cache). **`assemble_system_prompt`** appends a `--- LOADED SKILLS ---` section to the subagent base system prompt when a loader is wired in.
-- **Resolution in reference code:** **Static per role** — each subagent class exposes `DEFAULT_SKILLS: tuple[str, ...]` matching the files above. The orchestrator/demo passes a shared `SkillLoader` into subagent constructors. Future: add `skills: []` to `TaskAssignment` (§6) for per-task overrides without changing skill file format.
+- **Resolution in reference code:** **Static per role** — each subagent class exposes `DEFAULT_SKILLS: tuple[str, ...]` matching the files above; `OrchestratorSupervisor` loads `orchestrator-supervisor` via `DEFAULT_SUPERVISOR_SKILLS`. The runtime passes a shared `SkillLoader` into subagent constructors and the supervisor. Future: add `skills: []` to `TaskAssignment` (§6) for per-task overrides without changing skill file format.
 - **Versioning / scope:** Treat skills as repo-versioned, project-agnostic doctrine. Durable, ticket-specific claims live in `project_memory.json` / `subagent_lore/` after curation, not in `skills/`.
 
 ---
@@ -324,6 +337,7 @@ Each phase is independently testable. Do not start a phase before the prior one'
 - SDLC state machine with all states, gates, transitions (Section 4).
 - Memory store read/write layer (the three stores, Section 5).
 - Task dispatch interface with **mocked subagents** returning canned artifacts.
+- Optional **supervisor LLM** (config-gated): delegation planning + gate advice with FSM safety clamps (`tests/phase1/test_orchestrator_supervisor.py`).
 - **Test:** a ticket walks INTAKE → DONE against mocked subagents; state persists and resumes mid-lifecycle.
 
 ### Phase 2 — First two subagents (the bookends)
@@ -349,6 +363,7 @@ Each phase is independently testable. Do not start a phase before the prior one'
 - **Issue-driven delivery:** `runner` + `issue_workflow` (adopt issue, synthetic requirements, worktree), `OrchestratorHooks` (commit/push after development gate, `create_pull_request` after review gate), `LocalGitClient` worktree helpers.
 - **Multi-issue supervisor:** `daemon.py` dequeues Backlog (configurable statuses), runs issue-driven `full` in a loop.
 - **Target workspace:** `target_clone.py` — managed clone outside control repo; `SDLC_TARGET_CLONE_PARENT`.
+- **Orchestrator supervisor LLM:** `orchestrator.use_llm_supervisor`, `OrchestratorSupervisor`, `skills/orchestrator-supervisor.md`; documented in `ARCHITECTURE.md` §2 and `system-design.md` §7.1.
 - End-to-end demo (`scripts/demo.py`); architecture (`ARCHITECTURE.md`); diagrams (`system-design.md`).
 - **Test:** skill resolution; trajectories; issue/PR/git/daemon/target-clone unit tests in `tests/phase0`–`phase5`.
 

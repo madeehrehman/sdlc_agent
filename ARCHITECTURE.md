@@ -364,7 +364,11 @@ Start at the seams, not the implementations:
 2. `src/sdlc_agent/orchestrator/state_machine.py` — pure FSM; `skip_requirements_analysis`
    is honored in `dispatcher.intake` (jump to `DEVELOPMENT`).
 3. `src/sdlc_agent/orchestrator/dispatcher.py` — dispatch → curation → gate →
-   transition → persist; `OrchestratorHooks` after dev/review gates; GitHub lifecycle sync.
+   transition → persist; optional supervisor enrichment; `OrchestratorHooks` after
+   dev/review gates; GitHub lifecycle sync.
+3b. `src/sdlc_agent/orchestrator/supervisor.py` — LLM delegation planning and gate
+   advice when `orchestrator.use_llm_supervisor` is enabled (`runtime.py` wires the
+   `orchestrator` model role).
 4. `src/sdlc_agent/runner.py` — operator single-run orchestration, issue worktrees, hooks.
 5. `src/sdlc_agent/daemon.py` — multi-issue dequeue loop over `list_project_items`.
 6. `src/sdlc_agent/target_clone.py` — managed clone outside the control repo.
