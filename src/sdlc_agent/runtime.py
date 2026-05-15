@@ -18,6 +18,7 @@ from sdlc_agent.orchestrator.dispatcher import Orchestrator, OrchestratorHooks, 
 from sdlc_agent.sandbox import LocalSubprocessSandbox
 from sdlc_agent.skills import SkillLoader
 from sdlc_agent.subagents import BacklogAnalyzer, DeveloperTester, PRReviewer
+from sdlc_agent.target_clone import resolve_target_workdir
 
 
 @dataclass
@@ -53,12 +54,14 @@ def build_sdlc_runtime(
 ) -> SDLCRuntime:
     """Load root config and assemble live clients, subagents, and orchestrator.
 
-    ``worktree_root`` optional directory is used as the DeveloperTester sandbox
-    and PRReviewer git root while ``.deepagent`` stays under ``target_repo_root``.
+    ``worktree_root`` is the DeveloperTester sandbox and PRReviewer git root when
+    set; otherwise it defaults to ``target_repo_root``. ``.deepagent`` always stays
+    under the resolved target checkout. When ``target_repo_root`` is omitted, that
+    checkout is a managed directory (see ``resolve_target_workdir`` in
+    ``sdlc_agent.target_clone``).
     """
     root_config = load_root_agent_config(root_config_path, env_path=env_path)
-    memory_repo_root = (target_repo_root or Path(root_config.target.repository or ".")).resolve()
-    memory_repo_root.mkdir(parents=True, exist_ok=True)
+    memory_repo_root = resolve_target_workdir(root_config, explicit_root=target_repo_root)
     sandbox_root = (worktree_root or memory_repo_root).resolve()
 
     config = root_config.to_deepagent_config(memory_repo_root)

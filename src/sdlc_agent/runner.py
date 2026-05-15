@@ -19,6 +19,7 @@ from sdlc_agent.mcp.git import LocalGitClient
 from sdlc_agent.orchestrator import SDLCPhase, TicketState
 from sdlc_agent.orchestrator.dispatcher import OrchestratorError, OrchestratorHooks
 from sdlc_agent.runtime import SDLCRuntime, build_sdlc_runtime
+from sdlc_agent.target_clone import resolve_target_workdir
 
 
 RunMode = Literal["backlog", "full"]
@@ -60,6 +61,11 @@ def run_sdlc_agent(
     mode continues through DeveloperTester and PRReviewer using the configured
     local target working tree.
 
+    ``target_repo_root`` selects the local checkout. When omitted, the runner uses
+    a managed directory under the system temp (or ``SDLC_TARGET_CLONE_PARENT``):
+    for ``lifecycle_client: mcp`` it runs ``git clone`` of ``target.repo_url``;
+    for ``fixture`` it only creates that directory (tests should pass an explicit path).
+
     When ``issue_number`` is set (``full`` mode only), the runner adopts that
     GitHub issue, creates a git worktree + branch from ``base_ref`` (defaulting
     to ``develop`` from config), seeds a synthetic requirements artifact, and
@@ -68,8 +74,7 @@ def run_sdlc_agent(
     """
     resolved_ticket_id = ticket_id or f"SDLC-{uuid.uuid4().hex[:8]}"
     root_config = load_root_agent_config(root_config_path, env_path=env_path)
-    memory_root = (target_repo_root or Path(root_config.target.repository or ".")).resolve()
-    memory_root.mkdir(parents=True, exist_ok=True)
+    memory_root = resolve_target_workdir(root_config, explicit_root=target_repo_root)
     da_config = root_config.to_deepagent_config(memory_root)
 
     github_external = None

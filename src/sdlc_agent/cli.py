@@ -5,12 +5,39 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from sdlc_agent.daemon import run_sdlc_daemon
 from sdlc_agent.runner import run_sdlc_agent
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.mode == "daemon":
+        dq: frozenset[str] | None = None
+        if args.daemon_dequeue_statuses:
+            dq = frozenset(args.daemon_dequeue_statuses)
+        summary = run_sdlc_daemon(
+            root_config_path=args.config,
+            env_path=args.env,
+            target_repo_root=args.target_repo_root,
+            dequeue_statuses=dq,
+            max_issues=args.max_issues,
+            max_steps=args.max_steps,
+            base_ref=args.base_ref,
+            head_ref=args.head_ref,
+            release_to_main_accepted=args.release_to_main_accepted,
+            worktrees_dir=args.worktrees_dir,
+            continue_on_error=args.daemon_continue_on_error,
+            sleep_seconds_between_issues=args.daemon_sleep_seconds,
+        )
+        print(f"daemon_stopped_reason={summary.stopped_reason}")
+        print(f"daemon_issues_completed={len(summary.results)}")
+        for i, r in enumerate(summary.results):
+            print(f"daemon_result_{i}_ticket_id={r.ticket_id}")
+            print(f"daemon_result_{i}_issue={r.github_issue_number}")
+            print(f"daemon_result_{i}_final_phase={r.final_phase}")
+        return 0
+
     result = run_sdlc_agent(
         root_config_path=args.config,
         env_path=args.env,
@@ -62,7 +89,8 @@ def _parser() -> argparse.ArgumentParser:
         "--target-repo-root",
         type=Path,
         default=None,
-        help="local target working tree path used by DeveloperTester and PRReviewer",
+        help="local clone of the target repo (optional: defaults to a managed folder "
+        "under the system temp, cloning from target.repo_url when using MCP)",
     )
     parser.add_argument(
         "--ticket-id",
@@ -71,15 +99,40 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=["backlog", "full"],
+        choices=["backlog", "full", "daemon"],
         default="backlog",
-        help="backlog creates/adopts GitHub issues; full continues through dev/review",
+        help="backlog creates/adopts GitHub issues; full continues through dev/review; "
+        "daemon repeatedly runs full issue-driven SDLC for queued lifecycle statuses",
     )
     parser.add_argument(
         "--max-steps",
         type=int,
         default=20,
-        help="maximum orchestrator steps before stopping",
+        help="maximum orchestrator steps before stopping each ticket/issue run",
+    )
+    parser.add_argument(
+        "--max-issues",
+        type=int,
+        default=None,
+        help="daemon: maximum issues to start (default: until queue empty)",
+    )
+    parser.add_argument(
+        "--daemon-dequeue-status",
+        action="append",
+        dest="daemon_dequeue_statuses",
+        metavar="STATUS",
+        help="daemon: lifecycle status treated as queued (repeatable); default Backlog",
+    )
+    parser.add_argument(
+        "--daemon-continue-on-error",
+        action="store_true",
+        help="daemon: log failures and continue with the next issue",
+    )
+    parser.add_argument(
+        "--daemon-sleep-seconds",
+        type=float,
+        default=0.0,
+        help="daemon: pause after each issue attempt (seconds)",
     )
     parser.add_argument(
         "--base-ref",

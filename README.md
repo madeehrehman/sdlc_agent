@@ -61,6 +61,8 @@ Useful variables:
 
 - `OPENAI_API_KEY`: required for live OpenAI calls.
 - `GITHUB_TOKEN`: required for live GitHub lifecycle integration.
+- `SDLC_TARGET_CLONE_PARENT` (optional): when you omit `--target-repo-root`, MCP mode
+  clones `target.repo_url` under this directory (default: ``<temp>/sdlc-agent-targets``).
 
 The root `sdlc-agent.yaml` points the master agent at the target GitHub repo.
 The target owner and repository name are derived from the repo URL by default,
@@ -73,8 +75,9 @@ target:
 ```
 
 `.deepagent/config.yaml` stores the derived target repo metadata, model
-settings, GitHub issue lifecycle settings, and gate options inside the target
-repo.
+settings, GitHub issue lifecycle settings, and gate options **inside the local
+target checkout** (the clone you pass with `--target-repo-root`, or the managed
+clone under your temp directory when that flag is omitted in MCP mode).
 
 For live GitHub lifecycle mode, `github.lifecycle_client: mcp` launches the
 official GitHub MCP server over stdio/Docker with the configured non-secret
@@ -141,6 +144,25 @@ out of scope for this path; the issue stays open with lifecycle labels through
 `DONE` (e.g. Release Ready unless `--release-to-main-accepted`).
 
 `full` mode without `--issue-number` runs the usual backlog-driven path for a ticket.
+
+### Multi-issue daemon
+
+`daemon` mode repeatedly picks the **lowest-numbered** open issue whose lifecycle
+status is **Backlog** (or statuses you pass with `--daemon-dequeue-status`), then
+runs the same **issue-driven** `full` pipeline as `--issue-number` (worktree,
+commit/push, PR). It stops when no matching issues remain, or after `--max-issues`
+starts. Requires `--target-repo-root`, `GITHUB_TOKEN` + Docker when using MCP,
+and `pull_requests` in MCP toolsets if you open PRs.
+
+```powershell
+sdlc-agent --mode daemon `
+  --target-repo-root ..\my_clone `
+  --base-ref develop `
+  --max-issues 10
+```
+
+Use `--daemon-continue-on-error` to keep draining after a failed issue; optional
+`--daemon-sleep-seconds` adds a pause between attempts.
 
 Live OpenAI tests are skipped unless `--run-live` and `OPENAI_API_KEY` are
 present. Live GitHub MCP tests also require `GITHUB_TOKEN`, Docker, and
