@@ -6,109 +6,221 @@ This document is a **visual companion** to `sdlc-deep-agent-spec.md` and `ARCHIT
 
 ## 1. System context (C4-style)
 
-Who talks to what at the boundary of the **target repository** and the **agent process**.
+Two repositories matter: the **control plane** (`sdlc_agent` package + `sdlc-agent.yaml`) and the **target project** (checkout where code and `.deepagent/` live).
 
 ```mermaid
 flowchart TB
   subgraph Actors
-    OP[Operator / integrator]
+    OP[Operator runs sdlc-agent CLI]
     HM[Human approver optional HITL]
   end
 
   subgraph External["External systems"]
     OAI[OpenAI Chat Completions API]
-    GIT[Git working copy]
-    GH[GitHub Issues fixture or future API]
+    GHMCP[GitHub MCP server Docker stdio]
+    GH[GitHub repo Issues and PRs]
+    GIT[Git local clone and worktrees]
   end
 
-  subgraph Process["sdlc_agent process"]
-    direction TB
-    ORCH["Orchestrator<br/>dispatcher + FSM + gate routing"]
+  subgraph Control["Control plane sdlc_agent repo"]
+    CFG[sdlc-agent.yaml + .env secrets]
+    CLI[sdlc-agent CLI]
+    RUN[runner.py]
+    DMN[daemon.py]
+    RT[runtime.py build_sdlc_runtime]
+  end
+
+  subgraph Process["Orchestration in-process"]
+    ORCH["Orchestrator dispatcher + FSM"]
     CG["CurationGate"]
     GA["GateApprover"]
-    LOAD["SkillLoader<br/>skills *.md"]
+    HOOKS["OrchestratorHooks commit push PR"]
+    LOAD["SkillLoader skills/*.md"]
 
-    subgraph Subagents["Subagents recursion depth 1"]
+    subgraph Subagents["Subagents depth 1"]
       BA[BacklogAnalyzer]
-      DV[Developer]
+      DV[DeveloperTester]
       PR[PRReviewer]
     end
-
-    REG["Subagent registry<br/>dict role to instance"]
-
+    REG["Subagent registry"]
     ORCH --> REG
     ORCH --> CG
     ORCH --> GA
+    ORCH --> HOOKS
     REG --> BA
     REG --> DV
     REG --> PR
-    LOAD -. inject system prompt slice .-> BA
-    LOAD -. inject system prompt slice .-> DV
-    LOAD -. inject system prompt slice .-> PR
+    LOAD -. system prompt .-> BA
+    LOAD -. system prompt .-> DV
+    LOAD -. system prompt .-> PR
   end
 
-  subgraph TargetRepo["Target project repo disk"]
-    DA[".deepagent"]
-    subgraph DAinner[" "]
-      direction LR
-      ST[state]
-      AR[artifacts]
-      PM[project_memory + lore]
-      EP[episodic JSONL]
-      TR[trajectories session task JSONL]
-    end
+  subgraph TargetCheckout["Target checkout disk"]
+    SRC[source tree specs.md code tests]
+    WT[".worktrees/ticket-id issue branch"]
+    DA[".deepagent state artifacts memory trajectories"]
   end
 
-  OP --> ORCH
-  HM -. GateApprover .-> GA
+  OP --> CLI
+  CLI --> RUN
+  CLI --> DMN
+  RUN --> RT
+  DMN --> RUN
+  RUN --> ORCH
+  RT --> ORCH
+  CFG --> RUN
 
   BA --> OAI
-  BA --> JIT
+  BA --> GHMCP
   DV --> OAI
   PR --> OAI
-  PR --> GIT
-  DV --> SBX["LocalSubprocessSandbox<br/>scoped cwd + tests"]
+  DV --> SBX["LocalSubprocessSandbox"]
+  PR --> LGC["LocalGitClient"]
+  RUN --> GHMCP
+  RUN --> LGC
+  HOOKS --> GHMCP
+  HOOKS --> LGC
 
+  GHMCP --> GH
+  LGC --> GIT
+  GIT --> TargetCheckout
+  SBX --> WT
+  LGC --> WT
   ORCH <--> DA
   CG <--> DA
-  BA -. no direct .deepagent read write .-> DA
-  DV -. no direct .deepagent read write .-> DA
-  PR -. no direct .deepagent read write .-> DA
+  BA -. assignment only .-> DA
+  DV -. assignment only .-> DA
+  PR -. assignment only .-> DA
+  HM -. GateApprover .-> GA
 ```
 
-**Legend:** Solid arrows are runtime dependencies (calls, reads, writes). Dotted lines are optional injection or human-in-the-loop. Only the orchestrator path (through `MemoryStores` and trajectory paths) persists to `.deepagent/`; subagents receive **assignment payloads** only.
+**Legend:** The operator runs the CLI from the control repo. The target checkout is either `--target-repo-root` or an auto-managed clone under `%TEMP%/sdlc-agent-targets/` (see `target_clone.py`). Subagents never read `.deepagent/` directly.
 
 ---
 
-## 2. Internal components and data ownership
+## 2. Target checkout resolution
 
-Logical modules inside `src/sdlc_agent/` and ownership of persistence.
+```mermaid
+flowchart TD
+  START[sdlc-agent invoked]
+  EXPLICIT{--target-repo-root set?}
+  USE[Use explicit path mkdir if needed]
+  MCP{lifecycle_client mcp?}
+  CLONE["git clone --depth 1 into SDLC_TARGET_CLONE_PARENT or temp/sdlc-agent-targets/owner_repo"]
+  MK[Create directory only fixture mode]
+  RUN[run_sdlc_agent / daemon / build_sdlc_runtime]
+
+  START --> EXPLICIT
+  EXPLICIT -->|yes| USE
+  EXPLICIT -->|no| MCP
+  MCP -->|yes| CLONE
+  MCP -->|no| MK
+  USE --> RUN
+  CLONE --> RUN
+  MK --> RUN
+```
+
+`.deepagent/` is always written under this checkout root. Issue worktrees live under `<checkout>/.worktrees/<ticket-id>/` unless `--worktrees-dir` overrides the parent.
+
+---
+
+## 3. CLI run modes
 
 ```mermaid
 flowchart LR
+  CLI[sdlc-agent]
+  B[mode backlog]
+  F[mode full]
+  D[mode daemon]
+
+  CLI --> B
+  CLI --> F
+  CLI --> D
+
+  B --> R1[run_sdlc_agent stop at DEVELOPMENT]
+  F --> Q{--issue-number?}
+  Q -->|yes| R2[issue-driven full worktree commit PR]
+  Q -->|no| R3[ticket full requirements to DONE]
+  D --> LOOP[dequeue Backlog issues FIFO by number]
+  LOOP --> R2
+```
+
+| Mode | Stops / behavior |
+|------|------------------|
+| `backlog` | After first issue adopted; phase `DEVELOPMENT` |
+| `full` + ticket | Full FSM on ticket; no auto commit/PR unless hooks added elsewhere |
+| `full` + `--issue-number` | Skip requirements phase; worktree; commit/push; `create_pull_request` |
+| `daemon` | Repeat issue-driven `full` until queue empty or `--max-issues` |
+
+---
+
+## 4. Issue-driven sequence (worktree → PR)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant CLI as sdlc-agent
+  participant R as runner
+  participant GH as GitHubProjectClient
+  participant G as LocalGitClient
+  participant O as Orchestrator
+  participant DV as DeveloperTester
+  participant PR as PRReviewer
+
+  CLI->>R: mode full issue_number N
+  R->>GH: get_issue update status In Development
+  R->>G: validate base_ref add_worktree branch
+  R->>O: seed requirement_analysis artifact intake skip to DEVELOPMENT
+  O->>DV: run TDD in worktree sandbox
+  DV-->>O: ArtifactReturn
+  O->>O: DEVELOPMENT_GATE proceed
+  R->>G: commit_all push_branch hook
+  O->>PR: run diff vs base_ref
+  PR-->>O: ArtifactReturn
+  O->>O: REVIEW_GATE proceed
+  R->>GH: create_pull_request hook
+  R->>G: remove_worktree
+```
+
+Hooks run only on **`PROCEED`** at the development and review gates when `issue_number` was set at intake.
+
+---
+
+## 5. Internal components and data ownership
+
+```mermaid
+flowchart LR
+  subgraph Operator
+    RUN2[runner.py]
+    DMN2[daemon.py]
+    TC[target_clone.py]
+  end
+
   subgraph Contracts
-    TA["TaskAssignment"]
-    AR["ArtifactReturn<br/>verification proposed_memory"]
+    TA[TaskAssignment]
+    AR[ArtifactReturn]
   end
 
   subgraph Orchestrator_pkg["orchestrator/"]
-    SM["state_machine.py<br/>pure FSM transitions"]
-    DP["dispatcher.py<br/>Orchestrator"]
-    CU["curation.py"]
-    HI["hitl.py"]
+    SM[state_machine.py]
+    DP[dispatcher.py + OrchestratorHooks]
+    CU[curation.py]
+    HI[hitl.py]
   end
 
   subgraph Memory_pkg["memory/"]
-    PTH["paths.py DeepAgentPaths"]
-    STO["stores.py MemoryStores"]
-    TRK["trajectories.py TrajectoryRecorder"]
-    INI["initializer.py"]
+    PTH[paths.py]
+    STO[stores.py]
+    TRK[trajectories.py]
   end
 
   subgraph Integration
-    LLM["llm OpenAIClient"]
-    MCP["github lifecycle + git"]
-    SBX["sandbox"]
+    LLM[llm/]
+    GHF[github.py fixture]
+    GHM[github_mcp.py]
+    FAC[mcp/factory.py]
+    GIT2[git.py LocalGitClient]
+    SBX2[sandbox/]
   end
 
   subgraph Workers["subagents/"]
@@ -117,94 +229,91 @@ flowchart LR
     PR2[pr_reviewer]
   end
 
+  RUN2 --> TC
+  DMN2 --> RUN2
+  RUN2 --> DP
+  RUN2 --> GHF
+  RUN2 --> GHM
+  FAC --> GHM
   DP --> SM
   DP --> CU
   DP --> HI
   DP --> STO
-  DP --> TA
   BA2 --> TA
   DV2 --> TA
   PR2 --> TA
-  BA2 --> AR
-  DV2 --> AR
-  PR2 --> AR
-
   STO --> PTH
   TRK --> PTH
-  INI --> PTH
-
-  BA2 --> LLM
-  DV2 --> LLM
-  PR2 --> LLM
-  BA2 --> MCP
-  PR2 --> MCP
-  DV2 --> SBX
 ```
 
-**Import note:** `Orchestrator` is imported from `sdlc_agent.orchestrator.dispatcher` (not from `orchestrator.__init__`) to avoid a circular import with `memory.stores`.
+**Import note:** `Orchestrator` is imported from `sdlc_agent.orchestrator.dispatcher` (not `orchestrator.__init__`) to avoid a circular import with `memory.stores`.
 
 ---
 
-## 3. Memory layout (single target repo)
-
-Three logical stores plus cold trajectories, as on disk.
+## 6. Memory layout (target checkout)
 
 ```mermaid
 flowchart TB
   subgraph Working["1 Working state per ticket"]
-    SF["state ticket_id.json<br/>TicketState current_phase attempts history"]
+    SF["state/ticket_id.json TicketState + ticket_inputs"]
   end
 
   subgraph Curated["2 Curated cross-session"]
-    PJ["project_memory.json facts"]
-    LO["subagent_lore role.json lore entries"]
+    PJ[project_memory.json]
+    LO[subagent_lore/*.json]
   end
 
-  subgraph Audit["3 Episodic audit append only"]
-    EP["episodic log.jsonl<br/>kind session_id ticket_id transitions"]
+  subgraph Audit["3 Episodic append-only"]
+    EP[episodic/log.jsonl]
   end
 
-  subgraph Art["Per-ticket artifacts orchestrator writes"]
-    A1["requirement_analysis.json"]
-    A2["implementation_summary.json"]
-    A3["review.json"]
+  subgraph Art["Per-ticket artifacts"]
+    A1[requirement_analysis.json]
+    A2[implementation_summary.json]
+    A3[review.json]
   end
 
-  subgraph Cold["Cold storage no auto reload into context"]
-    TJ["trajectories session_id task_id.jsonl<br/>LLM prompt response per line"]
+  subgraph Cold["Cold storage"]
+    TJ[trajectories/session/task.jsonl]
   end
 
-  ORC[Orchestrator CurationGate] --> Working
+  subgraph GitWork["Issue branch optional"]
+    WT2[".worktrees/ticket-id/"]
+  end
+
+  ORC[Orchestrator] --> Working
   ORC --> Curated
   ORC --> Audit
   ORC --> Art
-  SUB[Subagents] -. propose only .-> ORC
-  TR[TrajectoryRecorder when wired] --> Cold
+  RUNR[runner issue path] --> WT2
+  TR[TrajectoryRecorder] --> Cold
 ```
 
 ---
 
-## 4. SDLC state machine (phases)
+## 7. SDLC state machine (phases)
 
-High-level FSM; gate **decisions** are `proceed`, `retry`, `blocked`, `needs_human` (see `state_machine.py`).
+Standard path. Issue-driven intake can skip directly to `DEVELOPMENT` when `skip_requirements_analysis` is on `ticket_inputs`.
 
 ```mermaid
 stateDiagram-v2
   [*] --> INTAKE
-  INTAKE --> REQUIREMENTS_ANALYSIS : intake
-  REQUIREMENTS_ANALYSIS --> REQUIREMENTS_GATE : dispatch BacklogAnalyzer
+  INTAKE --> REQUIREMENTS_ANALYSIS : default intake
+  INTAKE --> DEVELOPMENT : issue-driven intake skip_requirements_analysis
+
+  REQUIREMENTS_ANALYSIS --> REQUIREMENTS_GATE : BacklogAnalyzer
   REQUIREMENTS_GATE --> DEVELOPMENT : proceed
   REQUIREMENTS_GATE --> REQUIREMENTS_ANALYSIS : retry
   REQUIREMENTS_GATE --> BLOCKED : blocked
   REQUIREMENTS_GATE --> NEEDS_HUMAN : needs_human
 
-  DEVELOPMENT --> DEVELOPMENT_GATE : dispatch Developer
+  DEVELOPMENT --> DEVELOPMENT_GATE : DeveloperTester
   DEVELOPMENT_GATE --> PR_REVIEW : proceed
   DEVELOPMENT_GATE --> DEVELOPMENT : retry
   DEVELOPMENT_GATE --> BLOCKED : blocked
   DEVELOPMENT_GATE --> NEEDS_HUMAN : needs_human
 
-  PR_REVIEW --> REVIEW_GATE : dispatch PRReviewer
+  PR_REVIEW --> REVIEW_GATE : PRReviewer
   REVIEW_GATE --> DONE : proceed
   REVIEW_GATE --> PR_REVIEW : retry
   REVIEW_GATE --> BLOCKED : blocked
@@ -215,69 +324,85 @@ stateDiagram-v2
   NEEDS_HUMAN --> [*]
 ```
 
+Gate decisions: `proceed`, `retry`, `blocked`, `needs_human` (`state_machine.py`).
+
 ---
 
-## 5. Single work-phase sequence (dispatch to curation)
-
-Typical flow for one subagent invocation; Developer adds multiple LLM steps inside one `run()`.
+## 8. Daemon dequeue loop
 
 ```mermaid
-sequenceDiagram
-  autonumber
-  participant O as Orchestrator
-  participant M as MemoryStores
-  participant S as Subagent
-  participant L as OpenAI API
-  participant T as TrajectoryRecorder optional
-  participant C as CurationGate
+flowchart TD
+  START[run_sdlc_daemon]
+  LIST[list_project_items via GitHub client]
+  PICK[pick lowest issue_number with status in dequeue set default Backlog]
+  EMPTY{any candidate?}
+  CAP{started less than max_issues?}
+  RUN[run_sdlc_agent full issue_number]
+  INC[started += 1]
+  ERR{continue_on_error?}
+  STOP1[stopped_reason queue_empty]
+  STOP2[stopped_reason max_issues]
 
-  O->>M: load TicketState
-  O->>O: build TaskAssignment injected context prior inputs
-  O->>S: run assignment
-  loop each LLM call when using structured output
-    S->>L: chat completion JSON schema
-    L-->>S: assistant text JSON
-    opt recorder wired
-      S->>T: append prompt response kind
-    end
-  end
-  S-->>O: ArtifactReturn
-  O->>M: save phase artifact JSON
-  O->>M: append episodic dispatch
-  O->>C: evaluate proposed_memory
-  C->>M: promote or reject log proposal_received promotion rejection
-  O->>O: transition to gate phase
-  O->>M: save TicketState
+  START --> LIST --> PICK --> EMPTY
+  EMPTY -->|no| STOP1
+  EMPTY -->|yes| CAP
+  CAP -->|no| STOP2
+  CAP -->|yes| RUN --> INC
+  RUN -->|exception| ERR
+  ERR -->|raise| X[abort]
+  ERR -->|log continue| LIST
+  INC --> LIST
 ```
+
+Successful runs move issues out of **Backlog** via lifecycle label updates, so they are not picked again.
 
 ---
 
-## 6. Least privilege: what each role touches
+## 9. Least privilege: what each role touches
 
 ```mermaid
 flowchart TB
   subgraph Orchestrator_only["Orchestrator only"]
-    W["write .deepagent all stores"]
-    R["read all stores build assignments"]
+    W[write .deepagent all stores]
+    R[read stores build assignments]
   end
 
   subgraph BA["BacklogAnalyzer"]
-    B1["read specs.md and GitHub Issues fixture"]
-    B2["call LLM"]
-    B3["no filesystem to target repo except via OS process"]
+    B1[read specs via GitHub MCP or fixture]
+    B2[create/list issues]
+    B3[LLM only no target .deepagent read]
   end
 
-  subgraph DV["Developer"]
-    D1["sandbox root only read write"]
-    D2["call LLM"]
-    D3["run tests subprocess in sandbox"]
+  subgraph DV["DeveloperTester"]
+    D1[sandbox root or issue worktree read write]
+    D2[LLM]
+    D3[run tests subprocess in sandbox cwd]
   end
 
   subgraph PRr["PRReviewer"]
-    P1["git read diff files"]
-    P2["call LLM"]
-    P3["no sandbox write"]
+    P1[LocalGitClient diff at sandbox or worktree root]
+    P2[LLM]
   end
+
+  subgraph Runner_only["runner issue-driven hooks"]
+    H1[commit push worktree]
+    H2[create_pull_request MCP]
+  end
+```
+
+---
+
+## 10. Promotion and CI (reference only)
+
+The **sdlc_agent** repo may ship `.github/workflows/sdlc-promotion.yml` as a **template** for PR gates (`develop` → `release` → `main`). The agent does **not** install that workflow into the target repo automatically. When a PR exists on the target, GitHub Actions run according to **that** repo's workflows; the orchestrator does not wait for CI before dequeuing the next issue.
+
+```mermaid
+flowchart LR
+  PR[PR merged or open on target]
+  GHA[Target repo GitHub Actions]
+  AG[sdlc_agent process]
+  PR --> GHA
+  GHA -. no feedback loop yet .-> AG
 ```
 
 ---
@@ -287,5 +412,5 @@ flowchart TB
 | Document | Use when |
 |----------|----------|
 | `sdlc-deep-agent-spec.md` | Full contracts, gates, build phases |
-| `ARCHITECTURE.md` | Tradeoffs and extension seams |
-| `README.md` | Setup, demo, test commands |
+| `ARCHITECTURE.md` | Tradeoffs, control vs target, issue-driven path, deferrals |
+| `README.md` | Setup, CLI examples, env vars |

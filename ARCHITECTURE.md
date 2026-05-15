@@ -205,43 +205,144 @@ are doctrine, not knowledge; doctrine is named.
 
 ---
 
-## Live Integration Boundary
+## Live integration boundary
 
-The GitHub lifecycle seam now has two implementations. `FixtureGitHubProject`
-is still the deterministic test/demo adapter, while `GitHubMCPProjectClient`
-uses the official GitHub MCP server over stdio/Docker for live Issues. The
-orchestrator and subagents still depend only on
-`GitHubProjectClient`, so live mode is selected by config/factory wiring rather
-than by changing workflow code.
+The GitHub lifecycle seam has two implementations. `FixtureGitHubProject` is the
+deterministic test/demo adapter; `GitHubMCPProjectClient` uses the official GitHub
+MCP server over stdio/Docker for live Issues and pull requests. The orchestrator
+and subagents depend only on `GitHubProjectClient`, so live mode is selected by
+`github.lifecycle_client` and `build_github_project_client` without changing
+workflow code.
 
-OpenAI is intentionally not routed through MCP. `sdlc-agent.yaml` and the
-derived `.deepagent/config.yaml` carry per-role model choices, and runtime
-assembly creates explicit OpenAI clients for Backlog Analyzer, DeveloperTester,
-PR Reviewer, and the reserved orchestrator role. Secrets remain in `.env`.
+MCP mode requires toolsets `repos`, `issues`, and `pull_requests` (factory
+validates `create_pull_request`). Issue lifecycle status is modeled as a single
+`status:<slug>` label per issue; `update_project_status` rewrites that label via
+`issue_write`.
+
+OpenAI is intentionally not routed through MCP. Root `sdlc-agent.yaml` and the
+derived `.deepagent/config.yaml` in the **target checkout** carry per-role model
+choices; `build_sdlc_runtime` creates OpenAI clients for Backlog Analyzer,
+DeveloperTester, and PR Reviewer. Secrets stay in `.env` on the control machine.
+
+`LocalGitClient` shells out to local `git` for PR Reviewer diffs and for runner-
+owned worktree/commit/push on issue-driven runs. It is not a hosted git MCP
+service.
+
+---
+
+## 8. Control plane vs target workspace
+
+**Decision.** The **sdlc_agent** repository is the control plane: `sdlc-agent.yaml`,
+skills, and the Python package. The **target repository** (for example tictactoe)
+is where code, tests, `.deepagent/`, and git remotes live. The operator runs
+`sdlc-agent` from the control repo; the agent never nests the target inside the
+control repo by default.
+
+**Target checkout resolution** (`target_clone.py`):
+
+| Input | Behavior |
+|-------|----------|
+| `--target-repo-root` set | Use that directory (created if missing). No auto-clone. |
+| Omitted + `lifecycle_client: mcp` | `git clone --depth 1` of `target.repo_url` into `<temp>/sdlc-agent-targets/<owner>_<repo>` (override parent with `SDLC_TARGET_CLONE_PARENT`). Reuses existing clone if `.git` is present. |
+| Omitted + `fixture` | Creates the same path layout without cloning (tests pass explicit paths). |
+
+**Memory anchor.** `DeepAgentPaths` and `.deepagent/` are always rooted at the
+**target checkout** (clone root), not at the control repo. Trajectories, state,
+artifacts, and episodic logs for a ticket live beside the target's source tree.
+
+**Why.** Separating control plane from target workspace matches how CI and humans
+work: one orchestrator config drives many repos, and the agent mutates a real git
+working tree that can push to `origin`.
+
+---
+
+## 9. Operator entrypoints: runner, runtime, daemon
+
+Three layers sit above the orchestrator:
+
+1. **`build_sdlc_runtime`** (`runtime.py`) — loads root config, resolves target
+   checkout, writes derived `.deepagent/config.yaml`, builds GitHub client,
+   role-routed LLM clients, subagent registry, and `Orchestrator`. Optional
+   `worktree_root` points DeveloperTester sandbox and PR Reviewer `LocalGitClient`
+   at a per-issue worktree while memory stays on the clone root.
+
+2. **`run_sdlc_agent`** (`runner.py`) — one ticket run. CLI modes:
+   - **`backlog`** — FSM through requirements; stops at `DEVELOPMENT` after
+     backlog gate adopts/creates GitHub issue metadata on the ticket.
+   - **`full`** — `run_to_completion` on the ticket. Without `--issue-number`,
+     runs requirements → development → review on the checkout (or worktree if
+     wired). With **`--issue-number`**, issue-driven path (below).
+   - **`daemon`** — implemented in `daemon.py`, not a separate FSM: repeatedly
+     dequeues lowest-numbered open issue whose lifecycle status is in the queue
+     (default `Backlog`) and calls `run_sdlc_agent(..., mode="full", issue_number=…)`.
+
+3. **`sdlc-agent` CLI** (`cli.py`) — parses flags and prints `SDLCRunResult` or
+   `DaemonSummary` (issue count, `stopped_reason`).
+
+---
+
+## 10. Issue-driven full runs (worktree, commit, PR)
+
+**Decision.** When `issue_number` is set, the runner adopts an existing GitHub
+issue instead of re-running Backlog Analyzer for scope. This is the primary path
+for “implement issue N in the target repo and open a PR.”
+
+**Flow.**
+
+1. `get_issue(n)` via GitHub client; set `github_issue_number`, `github_project_item_id`
+   (`ISSUE_<n>`), `skip_requirements_analysis`, and `git_work_branch` on ticket inputs.
+2. `update_project_status` → **In Development**.
+3. Validate `base_ref` (default `develop` from config) exists locally; **do not**
+   auto-create promotion branches (`develop` / `release` / `main`).
+4. `LocalGitClient.add_worktree` under `<target>/.worktrees/<ticket-id>/` (or
+   `--worktrees-dir`) with branch `sdlc/issue-<n>-<slug>`.
+5. Seed `requirement_analysis` artifact from issue body + parsed acceptance criteria
+   (`issue_workflow.synthetic_requirements_artifact`).
+6. `intake` jumps to `DEVELOPMENT` when `skip_requirements_analysis` is set.
+7. Subagents run with sandbox/git rooted at the **worktree**.
+8. **`OrchestratorHooks`** (dispatcher):
+   - After **DEVELOPMENT_GATE** `PROCEED`: commit all changes in worktree (if any),
+     `push_branch` to `origin`.
+   - After **REVIEW_GATE** `PROCEED`: `create_pull_request` via MCP; store
+     `github_pr_number` / `github_pr_url` on ticket inputs.
+9. Worktree removed in `finally`; GitHub client closed.
+
+**Contrast with ticket-only `full`.** `full` without `--issue-number` does **not**
+install commit/push/PR hooks. It is the classic backlog-ticket path (requirements
+artifact from Backlog Analyzer). Uncommitted edits may remain in the checkout;
+`NEEDS_HUMAN` is common when DeveloperTester verification fails (for example test
+runner layout).
+
+**GitHub sync on phase transitions** (existing): `_sync_github_lifecycle` maps
+phases to status labels (In Development, In Review, Release Ready / Done, etc.).
+Closing the issue on `DONE` only when `release_to_main_accepted` is set on inputs.
 
 ---
 
 ## What is intentionally not built
 
-These are deferrals, not gaps — they don't change the architecture, they
-swap an implementation under an existing seam.
+These are deferrals, not architectural gaps — they swap implementations or add
+layers **above** the existing orchestrator without changing subagent contracts.
 
-- **Live PR/git service integration.** `LocalGitClient` still owns local diff
-  reads. Posting PR reviews and GitHub Actions orchestration can land behind a
-  later git/PR lifecycle adapter.
-- **Docker sandbox for the Developer.** `LocalSubprocessSandbox` implements
-  the `Sandbox` Protocol; a `DockerSandbox` is a drop-in replacement when
-  the deployment target moves off the developer's laptop.
-- **LangGraph supervisor wrapper.** The current `Orchestrator` is a hand-
-  rolled FSM. LangGraph adds graphical introspection and built-in
-  checkpointing; the existing per-transition `save_ticket_state` already
-  provides the durability guarantee LangGraph's checkpointing would.
-- **Expanded CLI commands** (`sdlc-agent init|status|resume`). The current
-  `sdlc-agent` entrypoint runs backlog or full workflow modes from
-  `sdlc-agent.yaml`; richer lifecycle commands can layer on top.
-- **Per-task skill resolution.** `TaskAssignment.skills: list[str]`
-  augments the current static-per-role mapping; the loader and assembly
-  helper are already written to consume an arbitrary name list.
+- **Waiting on GitHub Actions / CI.** PRs may trigger workflows in the target
+  repo, but the agent does not poll check runs or block on Actions success before
+  closing an issue or dequeuing the next one.
+- **Target repo bootstrap.** The agent does not copy `.github/workflows/` or
+  scaffold branch protection into the target; promotion gates in the **sdlc_agent**
+  repo are a reference template only until committed on the target.
+- **Automated `develop` → `release` → `main` promotion.** Branch validation exists;
+  creating missing promotion branches and merge automation are out of scope.
+- **Configurable sandbox test command in YAML.** DeveloperTester uses
+  `LocalSubprocessSandbox` default `unittest discover`; pytest/npm targets need
+  a config seam or project layout that matches the default.
+- **Docker sandbox for the Developer.** `DockerSandbox` can implement the same
+  `Sandbox` protocol as `LocalSubprocessSandbox`.
+- **LangGraph supervisor wrapper.** Per-transition `save_ticket_state` already
+  provides resume durability.
+- **Rich CLI** (`init|status|resume`). `backlog` / `full` / `daemon` cover the
+  current operator surface.
+- **Per-task skill resolution.** Static `DEFAULT_SKILLS` per subagent class today;
+  `TaskAssignment.skills` is an additive extension.
 
 ---
 
@@ -249,18 +350,17 @@ swap an implementation under an existing seam.
 
 Start at the seams, not the implementations:
 
-1. `src/sdlc_agent/contracts/` — `TaskAssignment` and `ArtifactReturn` are
-   the only two messages crossing the orchestrator/subagent boundary. If
-   you can read these two files, you understand the wire protocol.
-2. `src/sdlc_agent/orchestrator/state_machine.py` — pure FSM. No I/O, no
-   LLM, no MCP. The phase graph in spec §4 is implemented here verbatim.
-3. `src/sdlc_agent/orchestrator/dispatcher.py` — the only file that does
-   real work. Dispatch → curation → gate → transition → persist, with HITL
-   plugged in via a Protocol.
-4. `src/sdlc_agent/subagents/` — each subagent is ~150–350 LOC of prompt +
-   self-checks. They're interchangeable.
-5. `src/sdlc_agent/runtime.py` — root-config startup assembly for real runs:
-   target config, GitHub lifecycle client, role-routed OpenAI clients, registry,
-   and orchestrator.
-6. `scripts/demo.py` — deterministic fixture wire-up against a non-trivial
-   ticket.
+1. `src/sdlc_agent/contracts/` — `TaskAssignment` and `ArtifactReturn` are the
+   only two messages crossing the orchestrator/subagent boundary.
+2. `src/sdlc_agent/orchestrator/state_machine.py` — pure FSM; `skip_requirements_analysis`
+   is honored in `dispatcher.intake` (jump to `DEVELOPMENT`).
+3. `src/sdlc_agent/orchestrator/dispatcher.py` — dispatch → curation → gate →
+   transition → persist; `OrchestratorHooks` after dev/review gates; GitHub lifecycle sync.
+4. `src/sdlc_agent/runner.py` — operator single-run orchestration, issue worktrees, hooks.
+5. `src/sdlc_agent/daemon.py` — multi-issue dequeue loop over `list_project_items`.
+6. `src/sdlc_agent/target_clone.py` — managed clone outside the control repo.
+7. `src/sdlc_agent/runtime.py` — assembly of clients, registry, orchestrator.
+8. `src/sdlc_agent/mcp/github_mcp.py` — live Issues + `create_pull_request`.
+9. `src/sdlc_agent/mcp/git.py` — local git, worktrees, commit, push.
+10. `src/sdlc_agent/subagents/` — stateless workers (prompt + self-checks).
+11. `scripts/demo.py` — deterministic fixture demo without MCP clone.
