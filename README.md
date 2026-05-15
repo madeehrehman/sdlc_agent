@@ -11,27 +11,37 @@ sandbox, reusable skills, and trajectory archiving.
 
 ## Overview
 
-The agent attaches to a target GitHub repository, initializes `.deepagent/`, and
-runs work through:
+This repository is the **control plane**: Python package, `sdlc-agent.yaml`, and
+skills. The **target project** (for example a tictactoe app repo) is a separate
+Git checkout where code, tests, git remotes, and `.deepagent/` live. Run
+`sdlc-agent` from here; do not nest the target inside this repo unless you pass
+`--target-repo-root` explicitly.
 
-`INTAKE` -> **Requirements analysis** from `specs.md` -> gate -> **Development**
-(DeveloperTester, TDD in a sandbox) -> gate -> **PR review** -> gate -> `DONE`
+When you omit `--target-repo-root` and use GitHub MCP mode, the agent clones
+`target.repo_url` under `<temp>/sdlc-agent-targets/<owner>_<repo>` (override with
+`SDLC_TARGET_CLONE_PARENT`).
+
+Per ticket, the orchestrator runs:
+
+`INTAKE` → **Requirements analysis** from `specs.md` (optional skip for issue-driven runs) → gate → **Development** (DeveloperTester, TDD in sandbox or issue worktree) → gate → **PR review** → gate → `DONE`
 
 `BacklogAnalyzer` reads `specs.md`, compares it with existing GitHub Issues,
-creates GitHub Issues with full acceptance criteria, and returns the created
-issue metadata to the orchestrator. The orchestrator can then run a selected
-issue through implementation, review, issue status labels, and issue closure.
+creates issues with acceptance criteria, and returns metadata to the orchestrator.
+Issue-driven **`full`** and **`daemon`** modes adopt an existing issue, implement
+in a git worktree, commit/push after the development gate, and open a PR via
+GitHub MCP when configured.
 
 ## Features
 
 - Explicit SDLC FSM with `PROCEED` / `RETRY` / `BLOCKED` / `NEEDS_HUMAN` routing.
-- GitHub-native backlog and lifecycle: `specs.md` -> GitHub Issues with status labels.
-- DeveloperTester loop that writes tests and implementation together.
-- PR Reviewer that receives requirement analysis, implementation summary, and git diff.
-- PR-gated GitHub Actions promotion from `develop` to `release` to `main`.
-- Container smoke verification in Actions when a target project has a `Dockerfile`.
-- Orchestrator-owned curation gate for durable project memory and subagent lore.
-- Skills loaded from `skills/*.md` and raw LLM trajectories archived under `.deepagent/trajectories/`.
+- GitHub-native backlog and lifecycle: `specs.md` → GitHub Issues with `status:*` labels.
+- Managed target clone (optional) or explicit `--target-repo-root`.
+- Issue-driven runs: worktree + branch, commit/push, `create_pull_request` (MCP).
+- Multi-issue **`daemon`** mode: dequeue Backlog issues and run issue-driven `full` in a loop.
+- DeveloperTester TDD loop (tests + implementation in one subagent).
+- PR Reviewer on local git diff with requirement context inlined from prior artifacts.
+- Orchestrator-owned curation gate, skills under `skills/`, trajectories under `.deepagent/`.
+- Reference workflow template in `.github/workflows/sdlc-promotion.yml` (control repo only; not auto-installed on targets).
 
 ## Requirements
 
@@ -71,7 +81,14 @@ and OpenAI model choices live there too. Secrets stay in `.env`:
 ```yaml
 target:
   repo_url: https://github.com/madeehrehman/sdlc_agent_tictactoe
-  specs_path: spec.md
+  specs_path: specs.md
+github:
+  lifecycle_client: mcp
+  mcp:
+    toolsets:
+      - repos
+      - issues
+      - pull_requests   # required for automated PR creation
 ```
 
 `.deepagent/config.yaml` stores the derived target repo metadata, model
@@ -96,6 +113,8 @@ toolset is required for automated PR creation from the agent).
 
 ## Quick Start
 
+From the **sdlc_agent** repo (with `.env` and `sdlc-agent.yaml` configured):
+
 ```powershell
 python -m pytest
 python scripts\demo.py
@@ -103,23 +122,48 @@ python -m pytest --run-live -m live
 python -m pytest --run-live -m github_live
 ```
 
-Run the live SDLC agent from the root config:
+### Recommended path for a target repo (e.g. tictactoe)
+
+**1. Seed backlog** (reads `specs.md` via MCP, creates/adopts issues, stops at development):
 
 ```powershell
-# Fetch specs.md via GitHub MCP, analyze backlog, create GitHub Issues,
-# label the first adopted issue, then stop at DEVELOPMENT.
-sdlc-agent --mode backlog --ticket-id GH-SEED
+sdlc-agent --mode backlog --ticket-id TTT-SEED
 ```
 
-To continue through DeveloperTester and PRReviewer, provide a local target
-clone (the repo that holds `.deepagent/`) for the code/test loop and git diff review:
+**2. Implement one issue end-to-end** (worktree, commit, push, open PR — preferred for real delivery):
+
+```powershell
+sdlc-agent --mode full --issue-number 5 --base-ref develop
+```
+
+Omit `--target-repo-root` to use the managed clone under `%TEMP%\sdlc-agent-targets\`.
+The target clone must already have branch `develop` (or your `--base-ref`); the agent
+does not create promotion branches for you.
+
+**3. Drain the backlog** (optional):
+
+```powershell
+sdlc-agent --mode daemon --base-ref develop --max-issues 10
+```
+
+### Other modes
+
+**Ticket-only full** (requirements → dev → review on a ticket; no auto commit/PR):
 
 ```powershell
 sdlc-agent --mode full `
-  --target-repo-root ..\sdlc_agent_tictactoe `
-  --ticket-id GH-SEED `
+  --ticket-id TTT-SEED `
   --base-ref develop `
   --head-ref HEAD
+```
+
+Use an explicit clone if you prefer:
+
+```powershell
+sdlc-agent --mode full `
+  --target-repo-root D:\work\sdlc_agent_tictactoe `
+  --ticket-id TTT-SEED `
+  --base-ref develop
 ```
 
 ### Issue-driven full run (worktree + PR)
@@ -148,17 +192,13 @@ out of scope for this path; the issue stays open with lifecycle labels through
 ### Multi-issue daemon
 
 `daemon` mode repeatedly picks the **lowest-numbered** open issue whose lifecycle
-status is **Backlog** (or statuses you pass with `--daemon-dequeue-status`), then
-runs the same **issue-driven** `full` pipeline as `--issue-number` (worktree,
-commit/push, PR). It stops when no matching issues remain, or after `--max-issues`
-starts. Requires `--target-repo-root`, `GITHUB_TOKEN` + Docker when using MCP,
-and `pull_requests` in MCP toolsets if you open PRs.
+status is **Backlog** (or statuses from `--daemon-dequeue-status`), then runs the
+same **issue-driven** `full` pipeline as `--issue-number`. Stops when the queue is
+empty or after `--max-issues` starts. Needs `GITHUB_TOKEN`, Docker (MCP), and
+`pull_requests` in MCP toolsets for PR creation.
 
 ```powershell
-sdlc-agent --mode daemon `
-  --target-repo-root ..\my_clone `
-  --base-ref develop `
-  --max-issues 10
+sdlc-agent --mode daemon --base-ref develop --max-issues 10
 ```
 
 Use `--daemon-continue-on-error` to keep draining after a failed issue; optional
@@ -171,24 +211,30 @@ present. Live GitHub MCP tests also require `GITHUB_TOKEN`, Docker, and
 
 ## Repository Layout
 
-- `src/sdlc_agent/contracts/`: assignment and artifact contracts.
-- `src/sdlc_agent/orchestrator/`: FSM, dispatcher, curation, HITL.
-- `src/sdlc_agent/memory/`: `.deepagent/` paths, stores, trajectories.
-- `src/sdlc_agent/mcp/github.py`: fixture GitHub Issues lifecycle client.
-- `src/sdlc_agent/mcp/github_mcp.py`: live GitHub MCP lifecycle client.
-- `src/sdlc_agent/mcp/stdio.py`: stdio/Docker MCP transport facade.
-- `src/sdlc_agent/mcp/git.py`: local git diff client.
-- `src/sdlc_agent/runtime.py`: root-config startup assembly for live runs.
-- `src/sdlc_agent/runner.py`: operator workflow runner used by the CLI.
-- `src/sdlc_agent/subagents/`: BacklogAnalyzer, DeveloperTester, PRReviewer.
-- `skills/`: reusable markdown skills.
-- `scripts/demo.py`: deterministic GitHub-native demo using canned LLM responses.
-- `.github/workflows/sdlc-promotion.yml`: PR-gated promotion checks.
-- `tests/phase0` ... `tests/phase5`: phase-aligned pytest suite.
+| Path | Role |
+|------|------|
+| `sdlc-agent.yaml` | Control-plane config: target repo URL, models, GitHub MCP |
+| `src/sdlc_agent/contracts/` | `TaskAssignment` and `ArtifactReturn` |
+| `src/sdlc_agent/orchestrator/` | FSM, dispatcher (+ `OrchestratorHooks`), curation, HITL |
+| `src/sdlc_agent/memory/` | `.deepagent/` paths, stores, trajectories |
+| `src/sdlc_agent/mcp/` | GitHub fixture + MCP, stdio transport, `LocalGitClient` |
+| `src/sdlc_agent/target_clone.py` | Managed clone under temp (or `SDLC_TARGET_CLONE_PARENT`) |
+| `src/sdlc_agent/runner.py` | Single-run operator (`backlog` / `full` / issue-driven) |
+| `src/sdlc_agent/daemon.py` | Multi-issue dequeue supervisor |
+| `src/sdlc_agent/issue_workflow.py` | Issue adoption helpers, synthetic requirements artifact |
+| `src/sdlc_agent/runtime.py` | Assemble clients, registry, orchestrator |
+| `src/sdlc_agent/cli.py` | `sdlc-agent` entrypoint |
+| `src/sdlc_agent/subagents/` | BacklogAnalyzer, DeveloperTester, PRReviewer |
+| `skills/` | Shared markdown skills (control repo) |
+| `scripts/demo.py` | Fixture demo without MCP clone |
+| `ARCHITECTURE.md` | Tradeoffs and extension seams |
+| `system-design.md` | Mermaid diagrams for current system |
+| `.github/workflows/sdlc-promotion.yml` | Reference PR gates (not pushed to targets by agent) |
+| `tests/phase0` … `phase5` | Phase-aligned pytest suite |
 
 ## Project Memory
 
-`.deepagent/` is created in a target repo:
+`.deepagent/` is created in the **target checkout** (not in the control-plane repo):
 
 - `config.yaml`: repo, model, GitHub, and gate configuration.
 - `project_memory.json`: curated project facts.
@@ -200,10 +246,10 @@ present. Live GitHub MCP tests also require `GITHUB_TOKEN`, Docker, and
 
 ## Extending
 
-GitHub lifecycle clients satisfy the same `GitHubProjectClient` surface. Use
-`FixtureGitHubProject` for deterministic tests and `GitHubMCPProjectClient` for
-live GitHub Issues through the official MCP server.
+- **GitHub:** `GitHubProjectClient` — `FixtureGitHubProject` (tests) or `GitHubMCPProjectClient` (live Issues + PRs).
+- **Git:** `LocalGitClient` — diff for review; worktree/commit/push in issue-driven runner hooks.
+- **Sandbox:** `LocalSubprocessSandbox` today; `DockerSandbox` can implement the same protocol.
 
-Future deployment providers can sit behind the current GitHub Actions smoke-test
-boundary. The first implementation only builds and runs a container in Actions
-when a `Dockerfile` exists.
+**Not built yet** (see `ARCHITECTURE.md`): waiting on target-repo CI/Actions before closing or dequeuing the next issue; auto-installing workflows on the target; automated `develop` → `release` → `main` promotion; configurable per-target test command in YAML.
+
+Diagrams: `system-design.md`. Design tradeoffs: `ARCHITECTURE.md`. Full contracts: `sdlc-deep-agent-spec.md`.

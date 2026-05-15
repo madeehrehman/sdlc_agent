@@ -2,7 +2,7 @@
 
 > **How to use this document.** This is both a design spec and an IDE build prompt. Paste it whole into your coding agent as the anchoring context, then drive the build phase by phase (Section 11). Each phase is independently testable. The architecture is fixed; the tech stack in Section 9 separates *recommended* swaps from the *reference implementation* in this repo.
 
-> **Implementation alignment (reference repo).** Sections 1–8 and 13 describe the **architecture** (load-bearing invariants). Sections 9–11 also document how the **current Python package** (`sdlc_agent`) realizes that architecture: vanilla FSM orchestration (not LangGraph), OpenAI with strict JSON-schema outputs, GitHub Issues lifecycle clients + local `git` subprocess, subprocess sandbox for the DeveloperTester, skills under `skills/` with per-role default loading, trajectory JSONL under `.deepagent/trajectories/<session-id>/`, and episodic events stamped with `session_id`. See `README.md` for operator-facing setup and `ARCHITECTURE.md` for tradeoffs.
+> **Implementation alignment (reference repo).** Sections 1–8 and 13 describe the **architecture** (load-bearing invariants). Sections 9–11 document how the **current Python package** (`sdlc_agent`) realizes it: vanilla FSM orchestration (not LangGraph), OpenAI structured outputs, GitHub Issues + PRs via fixture or GitHub MCP (stdio/Docker), `LocalGitClient` for diff/worktree/commit/push, `LocalSubprocessSandbox` for DeveloperTester, skills under `skills/`, trajectories under `.deepagent/trajectories/<session-id>/`, operator layers (`runner.py`, `daemon.py`, `target_clone.py`, `cli.py`), and issue-driven full runs (worktree, commit/push, `create_pull_request`). The **control repo** holds `sdlc-agent.yaml`; the **target checkout** (managed clone or `--target-repo-root`) holds code and `.deepagent/`. See `README.md`, `ARCHITECTURE.md`, and `system-design.md`.
 
 ---
 
@@ -40,9 +40,9 @@ Owns:
 - **Project memory** on the filesystem — read and write authority (Section 5).
 - **Memory curation** — the promotion gate from proposed → durable.
 - **Human-in-the-loop gates** — pausing for approval at defined checkpoints.
-- **GitHub Issues** (issue lifecycle) and **git** (branch/PR lifecycle orchestration).
+- **GitHub Issues** (issue lifecycle) and coordination with **local git** (via runner hooks on issue-driven paths: worktree, commit, push, open PR).
 
-Does NOT: write code, generate tests, or review PRs directly. It dispatches and gates.
+Does NOT: write code, generate tests, or review PRs directly. It dispatches and gates. Commit/push and `create_pull_request` are **runner-owned hooks** after development/review gates when `issue_number` is set — not separate subagents.
 
 ### 3.2 Subagents
 
@@ -67,6 +67,7 @@ Owned by the orchestrator. Each phase ends at a **gate** where the orchestrator 
 ```
 INTAKE
   └─> REQUIREMENTS_ANALYSIS        (dispatch: Backlog Analyzer)
+  │     OR skip when issue-driven: INTAKE ──> DEVELOPMENT (synthetic requirement artifact from GitHub issue)
         └─> REQUIREMENTS_GATE      unambiguous? acceptance criteria present?
                                    [optional human approval]
               └─> DEVELOPMENT      (dispatch: Developer — TDD: code + tests together)
@@ -100,12 +101,30 @@ contains non-secret startup settings only: the target GitHub repo URL,
 model choices. `OPENAI_API_KEY` and `GITHUB_TOKEN` stay in `.env`.
 
 On startup, the master agent loads `.env`, then `sdlc-agent.yaml`, parses
-`target.repo_url`, derives the GitHub owner/repository name, initializes
-the target repo's `.deepagent/config.yaml`, and starts the SDLC workflow.
+`target.repo_url`, derives the GitHub owner/repository name, resolves a **target
+checkout** (see §5.1.1), initializes that checkout's `.deepagent/config.yaml`, and
+starts the SDLC workflow.
+
+#### 5.1.1 Target checkout (control plane vs target workspace)
+
+The **system repository** (`sdlc_agent`) is the control plane: package, skills,
+`sdlc-agent.yaml`. The **target repository** is where application code and
+`.deepagent/` live.
+
+| Resolution | Behavior |
+|------------|----------|
+| `--target-repo-root` set | Use that path (created if missing). |
+| Omitted + `github.lifecycle_client: mcp` | `git clone --depth 1` of `target.repo_url` into `<temp>/sdlc-agent-targets/<owner>_<repo>` (override parent: env `SDLC_TARGET_CLONE_PARENT`). Reuse if `.git` already exists. |
+| Omitted + `fixture` | Create the same directory name without cloning (tests pass explicit paths). |
+
+Issue-driven runs add a **git worktree** under `<checkout>/.worktrees/<ticket-id>/`
+(or `--worktrees-dir`) with branch `sdlc/issue-<n>-<slug>`; DeveloperTester and
+PR Reviewer use the worktree as sandbox/git root while memory stays on the clone root.
 
 ### 5.2 The `.deepagent/` project-local folder
 
-Created in the target repo on first run. This *is* the memory — the context window only ever holds a working set.
+Created in the **target checkout** on first run (not inside the control-plane repo
+unless you point `--target-repo-root` there). This *is* the memory — the context window only ever holds a working set.
 
 ```
 .deepagent/
@@ -147,6 +166,23 @@ The reliability core. Subagents never write to project memory directly.
 - Every promotion is recorded in the episodic log.
 - Promotion threshold for "fact" status: corroborated more than once, or explicitly high-confidence with evidence.
 
+### 5.5 Operator entrypoints (above the orchestrator)
+
+These are not subagents; they wire config, GitHub, git, and the orchestrator for operators.
+
+| Module | Role |
+|--------|------|
+| `build_sdlc_runtime` | Load config, resolve target checkout, build GitHub + OpenAI clients, subagent registry, `Orchestrator` (+ optional `OrchestratorHooks`, `worktree_root`). |
+| `run_sdlc_agent` | One ticket: `backlog` (stop at DEVELOPMENT), `full` (ticket FSM to completion), or `full` + `issue_number` (issue-driven worktree, commit/push, PR hooks). |
+| `run_sdlc_daemon` | Loop: dequeue lowest open issue with lifecycle status in queue (default **Backlog**), run issue-driven `full` until empty or `--max-issues`. |
+| `sdlc-agent` CLI | Parses flags; prints `SDLCRunResult` or `DaemonSummary`. |
+
+**CLI modes:** `backlog` | `full` | `daemon`. Issue-driven hooks (commit, push, `create_pull_request`) apply only when `issue_number` is set on the run (directly or via daemon).
+
+**GitHub lifecycle labels:** one `status:<slug>` label per issue (e.g. `status:in-development`); `update_project_status` replaces the status label via MCP `issue_write`.
+
+**Deferrals:** no wait for GitHub Actions CI before close/dequeue; no auto-install of target `.github/workflows/`; no automated promotion branch creation or merge to `release`/`main`.
+
 ---
 
 ## 6. The Task Assignment Contract (Orchestrator → Subagent)
@@ -173,7 +209,19 @@ The assignment is **stateful by injection**. The orchestrator decides what slice
 }
 ```
 
-**Reference wiring:** The orchestrator merges `TicketState.ticket_inputs` (e.g. `specs_path`, `github_issue_number`, `base_ref`, `head_ref`) into `inputs` for every dispatch. To keep subagents least-privileged (no read access to `.deepagent/artifacts/`), it **inlines** selected prior artifacts: after requirements analysis, `inputs["requirement_analysis"]` carries the requirement-analysis *body* for the Developer; after development, `inputs["implementation_summary"]` carries the implementation artifact body for the PR Reviewer. Paths to prior artifacts still appear in `injected_context.relevant_artifacts` for audit.
+**Reference wiring:** The orchestrator merges `TicketState.ticket_inputs` into `inputs` for every dispatch. Common keys:
+
+| Key | Purpose |
+|-----|---------|
+| `specs_path` | Backlog Analyzer reads specs via GitHub MCP |
+| `github_issue_number`, `github_project_item_id` | Lifecycle sync (`ISSUE_<n>`) |
+| `skip_requirements_analysis` | Issue-driven intake jumps to `DEVELOPMENT` |
+| `git_work_branch` | Feature branch name in issue worktree |
+| `base_ref`, `head_ref` | PR Reviewer diff (`head_ref` often `HEAD` in worktree) |
+| `github_pr_number`, `github_pr_url` | Set after review-gate PR hook |
+| `release_to_main_accepted` | Close issue on `DONE` when true |
+
+To keep subagents least-privileged (no read access to `.deepagent/artifacts/`), the orchestrator **inlines** prior artifact bodies: `inputs["requirement_analysis"]` for Developer; `inputs["implementation_summary"]` for PR Reviewer. For issue-driven runs, requirements may be seeded from the GitHub issue body (`issue_workflow.synthetic_requirements_artifact`) before intake. Paths still appear in `injected_context.relevant_artifacts` for audit.
 
 Optional future field: `"skills": ["skill-name", ...]` — if added to the contract, subagents would resolve these via the skill loader in addition to or instead of static per-role defaults.
 
@@ -212,15 +260,14 @@ Task in, **verified** artifact out. The subagent self-verifies before returning 
 
 Enforce least privilege at the subagent boundary — this is the security story.
 
-| Capability | Orchestrator | Backlog Analyzer | Developer | PR Reviewer |
-|---|---|---|---|---|
-| `.deepagent/` write | ✅ (sole writer) | ❌ | ❌ | ❌ |
-| GitHub Issues | ✅ issue lifecycle | ✅ read specs + create issues | issue metadata | PR/release metadata |
-| git MCP | ✅ branch/PR lifecycle | ❌ | read context only | ✅ read diff, post review |
-| Filesystem (working tree) | ❌ | ❌ | ✅ read all / write code + tests | ✅ read-only |
-| Sandbox execution | ❌ | ❌ | ✅ | ❌ |
-| Planning tool | ✅ long-horizon | ✅ internal scratchpad | ✅ internal | ✅ internal |
-| Spawn subagents | ✅ | ❌ | ❌ | ❌ |
+| Capability | Orchestrator | Backlog Analyzer | Developer | PR Reviewer | Runner (issue-driven) |
+|---|---|---|---|---|---|
+| `.deepagent/` write | ✅ (sole writer) | ❌ | ❌ | ❌ | ❌ |
+| GitHub Issues | ✅ lifecycle sync | ✅ specs + create issues | — | — | ✅ get issue, status, `create_pull_request` |
+| Local git | — | ❌ | via sandbox cwd | ✅ read diff | ✅ worktree, commit, push |
+| Filesystem (target) | ❌ | ❌ | ✅ sandbox / worktree | ✅ read via git | sets up worktree |
+| Sandbox tests | ❌ | ❌ | ✅ | ❌ | — |
+| Spawn subagents | ✅ | ❌ | ❌ | ❌ | invokes `run_sdlc_agent` only |
 
 MCP servers are attached to specific agents, not globally available.
 
@@ -236,12 +283,14 @@ Swap freely at integration boundaries. Below, **Recommended** is the long-term /
 | **Orchestration** | LangGraph (supervisor, subgraphs, optional checkpointing) | **Vanilla Python FSM** — `SDLCPhase`, pure transition helpers, `Orchestrator.advance()` / `run_to_completion()` |
 | **LLM** | OpenAI or other provider with structured output | **OpenAI** Chat Completions API; `OpenAIClient.complete()` with optional `response_format` JSON Schema (`strict: true`) for subagents; runtime factories route per-role models from `sdlc-agent.yaml` |
 | **Persistence** | Plain files under `.deepagent/` | JSON / JSONL / YAML as in §5.1; `MemoryStores` owns all writes except subagent sandboxes |
-| **GitHub lifecycle** | GitHub Issues API or MCP | **`FixtureGitHubProject`** for deterministic tests; **`GitHubMCPProjectClient`** for live Issues via the official GitHub MCP server over stdio/Docker |
-| **Git** | Real git MCP (diff, PR lifecycle) | **`LocalGitClient`** — local `git` subprocess for diff / files changed / branch; **`GitMCPStub`** for handshake |
-| **Developer sandbox** | Docker (or similar): mount working tree only | **`LocalSubprocessSandbox`** — temp directory root, path containment, bounded timeout, configurable test command (e.g. `python -m unittest discover`) |
-| **Skills** | Shared markdown library, named per task | **`SkillLoader`** reading `skills/*.md`; each subagent declares **`DEFAULT_SKILLS`** (static per-role); see §10 |
+| **GitHub lifecycle** | GitHub Issues API or MCP | **`FixtureGitHubProject`** (tests); **`GitHubMCPProjectClient`** (live Issues + **`create_pull_request`**); factory requires MCP tools including `pull_requests` toolset |
+| **Git** | Real git MCP (diff, PR lifecycle) | **`LocalGitClient`** — diff, worktree add/remove, commit, push; **`GitMCPStub`** for handshake only |
+| **Target checkout** | Clone per run | **`target_clone.resolve_target_workdir`** — managed clone under temp or explicit `--target-repo-root` |
+| **Operator** | CLI / CI entry | **`runner.run_sdlc_agent`**, **`daemon.run_sdlc_daemon`**, **`cli.main`** (`backlog` / `full` / `daemon`) |
+| **Developer sandbox** | Docker (or similar): mount working tree only | **`LocalSubprocessSandbox`** — root = checkout or issue worktree; default `unittest discover` (project-specific command not yet in YAML) |
+| **Skills** | Shared markdown library, named per task | **`SkillLoader`** + per-subagent **`DEFAULT_SKILLS`**; see §10 |
 
-**Optional swaps (unchanged architecture):** Replace `LocalGitClient` with a service-backed git client; replace `GitHubMCPProjectClient` with direct REST/GraphQL if MCP is not desired; wrap `Orchestrator` in LangGraph without changing subagent contracts; add `DockerSandbox` implementing the same `Sandbox` protocol as `LocalSubprocessSandbox`.
+**Optional swaps (unchanged architecture):** Replace `LocalGitClient` with a service-backed git client; replace `GitHubMCPProjectClient` with direct REST/GraphQL; wrap `Orchestrator` in LangGraph; add `DockerSandbox`; add configurable `test_command` in root config; add CI-wait gate before issue close/dequeue.
 
 ---
 
@@ -296,9 +345,12 @@ Each phase is independently testable. Do not start a phase before the prior one'
 ### Phase 5 — Skills + polish
 - Skill library (`skills/*.md`) + `SkillLoader` + per-role `DEFAULT_SKILLS`; prepended to subagent system prompts.
 - **`TrajectoryRecorder`:** `.deepagent/trajectories/<session-id>/<task-id>.jsonl` — full prompt + response per LLM call when recorder is wired; orchestrator **`session_id`** on episodic events.
-- **Live adapters:** root-config runtime assembly, GitHub MCP stdio/Docker client, fixture-vs-MCP lifecycle factory, `sdlc-agent` workflow runner, and opt-in live smoke tests.
-- End-to-end demo (`scripts/demo.py`) and architecture writeup (`ARCHITECTURE.md`).
-- **Test:** skill resolution/injection; one JSONL per task; Developer multi-step loop produces one trace line per iteration + summary line.
+- **Live adapters:** root-config runtime assembly, GitHub MCP stdio/Docker client (Issues + PRs), fixture-vs-MCP lifecycle factory, `sdlc-agent` CLI (`backlog` / `full` / `daemon`), and opt-in live smoke tests.
+- **Issue-driven delivery:** `runner` + `issue_workflow` (adopt issue, synthetic requirements, worktree), `OrchestratorHooks` (commit/push after development gate, `create_pull_request` after review gate), `LocalGitClient` worktree helpers.
+- **Multi-issue supervisor:** `daemon.py` dequeues Backlog (configurable statuses), runs issue-driven `full` in a loop.
+- **Target workspace:** `target_clone.py` — managed clone outside control repo; `SDLC_TARGET_CLONE_PARENT`.
+- End-to-end demo (`scripts/demo.py`); architecture (`ARCHITECTURE.md`); diagrams (`system-design.md`).
+- **Test:** skill resolution; trajectories; issue/PR/git/daemon/target-clone unit tests in `tests/phase0`–`phase5`.
 
 ---
 
@@ -306,9 +358,9 @@ Each phase is independently testable. Do not start a phase before the prior one'
 
 The original assessment framing asked candidates to **architect for three subagents** but **implement two** bookends plus a strong curation path (see wording preserved in assessments that cite this doc).
 
-**This repository goes further:** Phases 0–5 are **fully implemented**, including the **Developer** (merged TDD loop + sandbox), **skills**, **trajectory archiving**, **`ARCHITECTURE.md`**, and **`scripts/demo.py`**. Treat §12 as the *minimum credible slice* for a time-boxed submission; treat the codebase as the *full* spec realization for learning and extension.
+**This repository goes further:** Phases 0–5 are **fully implemented**, including the **Developer** (merged TDD loop + sandbox), **skills**, **trajectory archiving**, **issue-driven worktree/PR path**, **multi-issue daemon**, **managed target clone**, **`ARCHITECTURE.md`**, **`system-design.md`**, and **`scripts/demo.py`**. Treat §12 as the *minimum credible slice* for a time-boxed submission; treat the codebase as the *full* spec realization for learning and extension.
 
-Regardless of scope, reviewers expect explicit tradeoff discussion — especially **merging code and test generation in one Developer** vs splitting an adversarial Tester. Arguments: merging wins for testability-by-construction in the same loop; splitting wins for orthogonal bug-finding — partially recovered by the **PR Reviewer**, which never authored the implementation. Detail: **`ARCHITECTURE.md`**.
+Regardless of scope, reviewers expect explicit tradeoff discussion — especially **merging code and test generation in one Developer** vs splitting an adversarial Tester (see **`ARCHITECTURE.md` §4**), and **control plane vs target checkout** vs nesting the target inside the system repo (see **`ARCHITECTURE.md` §8–10**).
 
 ---
 
