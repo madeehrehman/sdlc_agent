@@ -60,6 +60,15 @@ and `src/sdlc_agent/orchestrator/curation.py` (gate). The dispatcher
 (`dispatcher.py`) is glue: it pulls from the FSM, dispatches to a subagent
 in the registry, runs returned proposals through the gate, then transitions.
 
+**Supervisor LLM (hybrid).** When `orchestrator.use_llm_supervisor` is true in
+`sdlc-agent.yaml`, an `OrchestratorSupervisor` (`supervisor.py`) uses the
+`orchestrator` model role to (1) plan delegation instructions before each
+subagent call and (2) advise gate decisions. The FSM still owns transitions:
+supervisor recommendations cannot `proceed` when default gate logic would
+`block` or `needs_human`, or when `verification.passed` is false. HITL gates
+remain human-only. Protocol text lives in `skills/orchestrator-supervisor.md`
+and `orchestrator/prompts.py`.
+
 ---
 
 ## 3. Subagents are stateless; assignments are stateful by injection

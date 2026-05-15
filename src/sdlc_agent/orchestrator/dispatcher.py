@@ -6,11 +6,12 @@ mocked) implement the same minimal protocol: ``run(assignment) -> ArtifactReturn
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from typing import Callable, Protocol, runtime_checkable
 
-from sdlc_agent.config import GateConfig
+from sdlc_agent.config import GateConfig, OrchestratorConfig
 from sdlc_agent.contracts import (
     ArtifactReturn,
     Constraints,
@@ -29,6 +30,7 @@ from sdlc_agent.orchestrator.curation import (
     is_promoted,
 )
 from sdlc_agent.orchestrator.hitl import GateApprover, HaltForHuman
+from sdlc_agent.orchestrator.supervisor import OrchestratorSupervisor
 from sdlc_agent.orchestrator.state_machine import (
     GATE_PHASES,
     GateDecision,
@@ -85,16 +87,19 @@ class Orchestrator:
         paths: DeepAgentPaths,
         registry: SubagentRegistry,
         gates: GateConfig | None = None,
+        orchestrator_config: OrchestratorConfig | None = None,
         max_attempts_per_phase: int = 2,
         approver: GateApprover | None = None,
         curation: CurationGate | None = None,
         session_id: str | None = None,
         github: GitHubProjectClient | None = None,
         hooks: OrchestratorHooks | None = None,
+        supervisor: OrchestratorSupervisor | None = None,
     ) -> None:
         self.paths = paths
         self.registry = registry
         self.gates = gates or GateConfig()
+        self.orchestrator_config = orchestrator_config or OrchestratorConfig()
         self.max_attempts_per_phase = max_attempts_per_phase
         self.memory = MemoryStores(paths)
         self.approver: GateApprover = approver or HaltForHuman()
@@ -102,6 +107,7 @@ class Orchestrator:
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.github = github
         self.hooks = hooks
+        self.supervisor = supervisor
 
     # ---------------------------------------------------------------- intake
     def intake(
@@ -191,6 +197,35 @@ class Orchestrator:
 
         attempt = state.bump_attempts(phase)
         assignment = self._build_assignment(state, phase, subagent_name, attempt)
+        if self._supervisor_enabled():
+            plan = self.supervisor.plan_delegation(
+                state=state,
+                phase=phase,
+                subagent=subagent_name,
+                attempt=attempt,
+                context_summary=self._supervisor_context_summary(
+                    state, phase, subagent_name
+                ),
+            )
+            assignment = assignment.model_copy(
+                update={
+                    "task": (
+                        f"{assignment.task}\n\n"
+                        f"Supervisor instructions:\n{plan.task_instructions}"
+                    ),
+                }
+            )
+            self._log_episode(
+                "supervisor_delegation",
+                state,
+                extra={
+                    "phase": phase.value,
+                    "subagent": subagent_name.value,
+                    "attempt": attempt,
+                    "rationale": plan.rationale,
+                    "focus_points": list(plan.focus_points),
+                },
+            )
         artifact = subagent.run(assignment)
 
         self.memory.save_artifact(state.ticket_id, phase, artifact)
@@ -236,12 +271,8 @@ class Orchestrator:
             )
             self._log_hitl_event(state, gate, approval)
         else:
-            decision, rationale = evaluate_default_gate(
-                gate,
-                artifact,
-                attempts_in_phase=attempts,
-                max_attempts=self.max_attempts_per_phase,
-                require_human=False,
+            decision, rationale = self._resolve_gate_decision(
+                state, gate, artifact, attempts_in_phase=attempts
             )
 
         if gate is SDLCPhase.REQUIREMENTS_GATE and decision is GateDecision.PROCEED:
@@ -259,6 +290,91 @@ class Orchestrator:
             if gate is SDLCPhase.REVIEW_GATE and self.hooks.after_review_gate_proceed:
                 self.hooks.after_review_gate_proceed(state)
         self._sync_github_lifecycle(state, next_phase)
+
+    def _supervisor_enabled(self) -> bool:
+        return (
+            self.orchestrator_config.use_llm_supervisor
+            and self.supervisor is not None
+        )
+
+    def _resolve_gate_decision(
+        self,
+        state: TicketState,
+        gate: SDLCPhase,
+        artifact: ArtifactReturn,
+        *,
+        attempts_in_phase: int,
+    ) -> tuple[GateDecision, str]:
+        default_decision, default_rationale = evaluate_default_gate(
+            gate,
+            artifact,
+            attempts_in_phase=attempts_in_phase,
+            max_attempts=self.max_attempts_per_phase,
+            require_human=False,
+        )
+        if not self._supervisor_enabled():
+            return default_decision, default_rationale
+
+        advice = self.supervisor.advise_gate(
+            state=state,
+            gate=gate,
+            artifact=artifact,
+            attempts_in_phase=attempts_in_phase,
+            max_attempts=self.max_attempts_per_phase,
+        )
+        decision = advice.decision
+        rationale = f"{gate}: supervisor — {advice.rationale}"
+        if advice.retry_guidance and decision is GateDecision.RETRY:
+            state.ticket_inputs["supervisor_retry_guidance"] = advice.retry_guidance
+
+        self._log_episode(
+            "supervisor_gate",
+            state,
+            extra={
+                "gate": gate.value,
+                "recommended_decision": decision.value,
+                "default_decision": default_decision.value,
+                "rationale": advice.rationale,
+            },
+        )
+
+        if default_decision in (GateDecision.BLOCKED, GateDecision.NEEDS_HUMAN):
+            return default_decision, default_rationale
+        if not artifact.verification.passed and decision is GateDecision.PROCEED:
+            return default_decision, default_rationale
+        return decision, rationale
+
+    def _supervisor_context_summary(
+        self,
+        state: TicketState,
+        phase: SDLCPhase,
+        subagent: SubagentName,
+    ) -> str:
+        injected = self._inject_context(state, phase, subagent)
+        parts: list[str] = []
+        if injected.project_facts:
+            parts.append(
+                "Project facts:\n" + "\n".join(f"- {f}" for f in injected.project_facts)
+            )
+        if injected.subagent_lore:
+            parts.append(
+                "Subagent lore:\n" + "\n".join(f"- {ln}" for ln in injected.subagent_lore)
+            )
+        guidance = state.ticket_inputs.get("supervisor_retry_guidance")
+        if guidance:
+            parts.append(f"Supervisor retry guidance from prior gate:\n{guidance}")
+        try:
+            phase_idx = WORK_PHASES.index(phase)
+        except ValueError:
+            phase_idx = len(WORK_PHASES)
+        for prior_phase in WORK_PHASES[:phase_idx]:
+            art = self.memory.load_artifact(state.ticket_id, prior_phase)
+            if art is not None:
+                parts.append(
+                    f"Prior artifact ({prior_phase.value}):\n"
+                    f"{json.dumps(art.artifact, indent=2, default=str)[:4000]}"
+                )
+        return "\n\n".join(parts) if parts else "(no prior context)"
 
     def _gate_requires_human(self, gate: SDLCPhase) -> bool:
         if gate is SDLCPhase.REQUIREMENTS_GATE and self.gates.hitl_requirements_gate:

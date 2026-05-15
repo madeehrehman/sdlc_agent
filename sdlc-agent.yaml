@@ -23,3 +23,6 @@ model:
     backlog_analyzer: gpt-4.1
     developer: gpt-4.1
     pr_reviewer: gpt-4.1
+
+# orchestrator:
+#   use_llm_supervisor: true

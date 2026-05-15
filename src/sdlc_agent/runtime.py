@@ -8,13 +8,14 @@ from typing import Any, Callable
 
 from sdlc_agent.config import DeepAgentConfig, RootAgentConfig, load_root_agent_config
 from sdlc_agent.contracts import SubagentName
-from sdlc_agent.llm.factory import build_role_openai_clients
+from sdlc_agent.llm.factory import ORCHESTRATOR_ROLE, build_role_openai_clients
 from sdlc_agent.mcp.factory import build_github_project_client
 from sdlc_agent.mcp.git import LocalGitClient
 from sdlc_agent.mcp.github import GitHubProjectClient
 from sdlc_agent.memory.paths import DeepAgentPaths
 from sdlc_agent.memory.trajectories import TrajectoryRecorder
 from sdlc_agent.orchestrator.dispatcher import Orchestrator, OrchestratorHooks, SubagentRegistry
+from sdlc_agent.orchestrator.supervisor import OrchestratorSupervisor
 from sdlc_agent.sandbox import LocalSubprocessSandbox
 from sdlc_agent.skills import SkillLoader
 from sdlc_agent.subagents import BacklogAnalyzer, DeveloperTester, PRReviewer
@@ -100,13 +101,22 @@ def build_sdlc_runtime(
                 recorder=recorder,
             ),
         }
+        supervisor: OrchestratorSupervisor | None = None
+        if config.orchestrator.use_llm_supervisor:
+            supervisor = OrchestratorSupervisor(
+                llm=llm_clients[ORCHESTRATOR_ROLE],
+                skills=skills,
+                recorder=recorder,
+            )
         orchestrator = Orchestrator(
             paths=paths,
             registry=registry,
             gates=config.gates,
+            orchestrator_config=config.orchestrator,
             session_id=session_id,
             github=github_client,
             hooks=orchestrator_hooks,
+            supervisor=supervisor,
         )
     except Exception:
         close = getattr(github_client, "close", None)
