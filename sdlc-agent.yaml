@@ -12,6 +12,7 @@ github:
     toolsets:
       - repos
       - issues
+      - pull_requests
     timeout_seconds: 30
 
 model:
