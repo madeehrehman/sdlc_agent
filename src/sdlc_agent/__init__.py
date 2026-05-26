@@ -1,3 +1,1 @@
-"""SDLC Deep Agent — orchestrator + stateless subagents for SDLC automation."""
-
-__version__ = "0.1.0"
+"""SDLC Deep Agent v2 — LangGraph-based multi-agent SDLC orchestrator."""

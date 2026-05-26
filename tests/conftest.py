@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 from dotenv import load_dotenv
 
-from sdlc_agent.llm.openai_client import OpenAIClient
 from sdlc_agent.mcp.github import FixtureGitHubProject
 
 
