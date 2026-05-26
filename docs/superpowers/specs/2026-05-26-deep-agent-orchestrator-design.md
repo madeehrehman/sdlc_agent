@@ -1,6 +1,6 @@
 # Deep Agent Orchestrator — Design Spec
 **Date:** 2026-05-26  
-**Status:** In Progress (brainstorming)  
+**Status:** Complete — approved, ready for implementation planning  
 **Replaces:** `sdlc-deep-agent-spec.md` (v1 FSM-based architecture)
 
 ---
@@ -65,8 +65,6 @@ Primary (supervisor graph)
 
 ---
 
----
-
 ## Section 2: Primary Agent
 
 ### LangGraph StateGraph Nodes
@@ -121,11 +119,13 @@ class PrimaryState(TypedDict):
     messages: list[BaseMessage]
 ```
 
+### Retry Policy
+
+`retry_count` in state tracks how many times a ticket has cycled back to Developer after rejection. Max retries = 3 (configurable in `sdlc-agent.yaml` as `max_retries`). On exceeding max, Primary labels the issue `Blocked`, posts a summary comment, and moves to the next ticket. The blocked issue stays open for human resolution.
+
 ### Constraint
 
 Primary never calls git, writes files to the codebase, or runs tests. All code interaction is delegated to sub-agents via subgraph invocation.
-
----
 
 ---
 
@@ -222,4 +222,96 @@ Session-scoped. Receives: approved branch + issue summary + deployment target co
 
 ---
 
-*Section 4: Project structure, config, Docker setup, migration plan (to be written)*
+## Section 4: Project Structure, Docker & Migration
+
+### Repository Layout
+
+```
+sdlc_agent/
+└── src/sdlc_agent/
+    ├── agents/                        # NEW
+    │   ├── primary/
+    │   │   ├── graph.py               # StateGraph definition
+    │   │   ├── nodes.py               # intake, create_issues, assign_*, close_issue, handle_rejection
+    │   │   ├── memory.py              # living memory read/write
+    │   │   └── tools.py              # github + memory tools only
+    │   ├── developer/
+    │   │   ├── graph.py
+    │   │   ├── nodes.py               # setup, plan, write_tests, implement, commit_and_report
+    │   │   └── tools.py              # file, git, test runner, shell tools
+    │   ├── reviewer/
+    │   │   ├── graph.py
+    │   │   ├── nodes.py               # load_context, read_diff, verify_tests, verify_standards, approve_or_reject
+    │   │   └── tools.py              # read-only: diff, coverage, PR approval tools
+    │   └── release/
+    │       ├── graph.py
+    │       ├── nodes.py               # prepare, build_and_verify, present_to_human, await_approval, deploy
+    │       └── tools.py              # docker build/deploy, smoke tests, interrupt
+    ├── state/
+    │   └── schemas.py                 # NEW — PrimaryState, DevResult, ReviewResult, ReleaseResult
+    ├── mcp/                           # KEEP — GitHub MCP client, fixture, stdio transport
+    ├── git/                           # KEEP — LocalGitClient, worktree management
+    ├── sandbox/                       # KEEP — wrap with DockerSandbox, keep subprocess fallback
+    ├── docker/                        # NEW — DockerSandbox execution wrapper
+    ├── config.py                      # KEEP — .env + yaml loading, add new docker/memory/hitl keys
+    ├── runner.py                      # NEW — CLI entrypoint: backlog | run | daemon modes
+    ├── orchestrator/                  # REMOVE — FSM, curation gate, supervisor
+    ├── subagents/                     # REMOVE — replaced by agents/
+    └── contracts/                     # REMOVE — replaced by state/schemas.py
+├── skills/                            # KEEP — markdown skills injected into agent system prompts
+├── docker/                            # NEW
+│   ├── Dockerfile.developer
+│   ├── Dockerfile.reviewer
+│   ├── Dockerfile.release
+│   └── docker-compose.yml
+├── sdlc-agent.yaml                    # KEEP — updated with new keys
+├── .env                               # KEEP — OPENAI_API_KEY, GITHUB_TOKEN
+└── langgraph.json                     # NEW — LangGraph project manifest
+```
+
+### Docker Images
+
+| Image | Base | Key Contents | Lifecycle |
+|---|---|---|---|
+| `sdlc-developer` | Python 3.11 + git | Target repo deps, test runner, lint tools. No network except GitHub + PyPI. | Ephemeral — destroyed after commit |
+| `sdlc-reviewer` | Python 3.11 + git | pytest-cov / lcov. Read-only mounts — diff + reports only. No write access. | Ephemeral — destroyed after review |
+| `sdlc-release` | Docker-in-Docker | git, deploy tools, prod Docker registry access. | Runs only after human approval |
+
+### Updated `sdlc-agent.yaml`
+
+```yaml
+llm:
+  model: gpt-4o
+  temperature: 0
+
+github:
+  target_repo: owner/repo
+
+docker:
+  developer_image: sdlc-developer:latest
+  reviewer_image: sdlc-reviewer:latest
+  release_image: sdlc-release:latest
+
+memory:
+  project_memory_path: .deepagent/memory.md
+
+hitl:
+  require_release_approval: true
+```
+
+### Migration Checklist
+
+| Status | Module | Action |
+|---|---|---|
+| ♻ KEEP | `mcp/` | GitHub MCP client, fixture client, stdio transport — no changes needed |
+| ♻ KEEP | `git/` | LocalGitClient, worktree management, push/diff |
+| ♻ KEEP | `sandbox/` | Add DockerSandbox wrapper on top; keep subprocess fallback for local dev |
+| ♻ KEEP | `skills/` | Markdown files injected into agent system prompts unchanged |
+| ♻ KEEP | `config/` `.env` | Add docker, memory, hitl keys; rest unchanged |
+| 🆕 NEW | `agents/` | 4 LangGraph graphs replacing FSM + stateless subagents |
+| 🆕 NEW | `state/schemas.py` | Typed state shapes replacing `TaskAssignment` / `ArtifactReturn` |
+| 🆕 NEW | `docker/` | 3 Dockerfiles + compose for isolated execution environments |
+| 🆕 NEW | `langgraph.json` | LangGraph project manifest registering all 4 graphs |
+| 🗑 REMOVE | `orchestrator/` | FSM, curation gate, OrchestratorSupervisor |
+| 🗑 REMOVE | `subagents/` | Stateless subagent pattern replaced by LangGraph subgraphs |
+| 🗑 REMOVE | `contracts/` | TaskAssignment/ArtifactReturn replaced by state schemas |
