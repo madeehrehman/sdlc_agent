@@ -4,12 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sdlc-deep-agent"
-version = "0.1.0"
-description = "SDLC Deep Agent — project-scoped multi-agent system that runs the software development lifecycle"
+version = "0.2.0"
+description = "SDLC Deep Agent — LangGraph-based multi-agent SDLC orchestrator"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Madaz" }]
 dependencies = [
+  "langgraph>=0.2.0",
+  "langchain-openai>=0.2.0",
+  "langchain-core>=0.3.0",
   "mcp>=1.0.0",
   "openai>=1.50.0",
   "pydantic>=2.7.0",
@@ -35,5 +38,5 @@ addopts = "-ra"
 pythonpath = ["src"]
 markers = [
   "live: hits the real OpenAI API; requires OPENAI_API_KEY and --run-live",
-  "github_live: hits the real GitHub MCP server; requires --run-live, GITHUB_TOKEN, Docker, and sdlc-agent.yaml",
+  "github_live: hits the real GitHub MCP server; requires GITHUB_TOKEN and --run-live",
 ]
