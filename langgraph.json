@@ -1,0 +1,10 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "primary": "sdlc_agent.agents.primary.graph:build_primary_graph",
+    "developer": "sdlc_agent.agents.developer.graph:build_developer_graph",
+    "reviewer": "sdlc_agent.agents.reviewer.graph:build_reviewer_graph",
+    "release": "sdlc_agent.agents.release.graph:build_release_graph"
+  },
+  "env": ".env"
+}

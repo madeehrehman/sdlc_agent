@@ -1,173 +1,107 @@
-"""Command line entrypoints for the SDLC agent."""
+"""CLI entrypoint for sdlc-agent.
 
+Commands:
+  sdlc-agent backlog   -- read specs.md and create GitHub issues
+  sdlc-agent run       -- run a single issue end-to-end
+  sdlc-agent daemon    -- drain Backlog issues in a loop
+"""
 from __future__ import annotations
 
 import argparse
+import uuid
 from pathlib import Path
 
-from sdlc_agent.daemon import run_sdlc_daemon
-from sdlc_agent.runner import run_sdlc_agent
+from langchain_core.messages import HumanMessage
+
+from sdlc_agent.agents.runtime import build_runtime
+from sdlc_agent.config import load_root_agent_config
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = _parser()
-    args = parser.parse_args(argv)
-    if args.mode == "daemon":
-        dq: frozenset[str] | None = None
-        if args.daemon_dequeue_statuses:
-            dq = frozenset(args.daemon_dequeue_statuses)
-        summary = run_sdlc_daemon(
-            root_config_path=args.config,
-            env_path=args.env,
-            target_repo_root=args.target_repo_root,
-            dequeue_statuses=dq,
-            max_issues=args.max_issues,
-            max_steps=args.max_steps,
-            base_ref=args.base_ref,
-            head_ref=args.head_ref,
-            release_to_main_accepted=args.release_to_main_accepted,
-            worktrees_dir=args.worktrees_dir,
-            continue_on_error=args.daemon_continue_on_error,
-            sleep_seconds_between_issues=args.daemon_sleep_seconds,
-        )
-        print(f"daemon_stopped_reason={summary.stopped_reason}")
-        print(f"daemon_issues_completed={len(summary.results)}")
-        for i, r in enumerate(summary.results):
-            print(f"daemon_result_{i}_ticket_id={r.ticket_id}")
-            print(f"daemon_result_{i}_issue={r.github_issue_number}")
-            print(f"daemon_result_{i}_final_phase={r.final_phase}")
-        return 0
-
-    result = run_sdlc_agent(
-        root_config_path=args.config,
-        env_path=args.env,
-        target_repo_root=args.target_repo_root,
-        ticket_id=args.ticket_id,
-        mode=args.mode,
-        max_steps=args.max_steps,
-        base_ref=args.base_ref,
-        head_ref=args.head_ref,
-        release_to_main_accepted=args.release_to_main_accepted,
-        session_id=args.session_id,
-        issue_number=args.issue_number,
-        worktrees_dir=args.worktrees_dir,
-    )
-    print(f"ticket_id={result.ticket_id}")
-    print(f"mode={result.mode}")
-    print(f"final_phase={result.final_phase}")
-    if result.github_issue_number is not None:
-        print(f"github_issue_number={result.github_issue_number}")
-    if result.github_item_id is not None:
-        print(f"github_item_id={result.github_item_id}")
-    if result.github_pr_number is not None:
-        print(f"github_pr_number={result.github_pr_number}")
-    if result.github_pr_url is not None:
-        print(f"github_pr_url={result.github_pr_url}")
-    print(f"state_path={result.state_path}")
-    print(f"artifacts_dir={result.artifacts_dir}")
-    return 0
+def cmd_backlog(args) -> None:
+    config = load_root_agent_config(Path(args.config))
+    target = Path(args.target)
+    graph = build_runtime(config, target_repo_root=target, use_docker=args.docker)
+    thread_id = str(uuid.uuid4())
+    cfg = {"configurable": {"thread_id": thread_id}}
+    initial = {
+        "messages": [HumanMessage(content="Run backlog mode: read specs and create GitHub issues only.")],
+        "phase": "intake",
+        "memory_snapshot": {},
+        "retry_count": 0,
+        "current_issue": None,
+        "dev_result": None,
+        "review_result": None,
+        "release_result": None,
+    }
+    for chunk in graph.stream(initial, cfg, stream_mode="values"):
+        phase = chunk.get("phase", "")
+        msgs = chunk.get("messages", [])
+        if msgs:
+            last = msgs[-1]
+            content = getattr(last, "content", str(last))
+            print(f"[{phase}] {str(content)[:120]}")
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="sdlc-agent",
-        description="Run the SDLC agent from the root sdlc-agent.yaml config.",
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path("sdlc-agent.yaml"),
-        help="root SDLC agent config path",
-    )
-    parser.add_argument(
-        "--env",
-        type=Path,
-        default=Path(".env"),
-        help=".env path containing OPENAI_API_KEY and GITHUB_TOKEN",
-    )
-    parser.add_argument(
-        "--target-repo-root",
-        type=Path,
-        default=None,
-        help="local clone of the target repo (optional: defaults to a managed folder "
-        "under the system temp, cloning from target.repo_url when using MCP)",
-    )
-    parser.add_argument(
-        "--ticket-id",
-        default=None,
-        help="ticket id for persisted .deepagent state; defaults to a generated id",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["backlog", "full", "daemon"],
-        default="backlog",
-        help="backlog creates/adopts GitHub issues; full continues through dev/review; "
-        "daemon repeatedly runs full issue-driven SDLC for queued lifecycle statuses",
-    )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=20,
-        help="maximum orchestrator steps before stopping each ticket/issue run",
-    )
-    parser.add_argument(
-        "--max-issues",
-        type=int,
-        default=None,
-        help="daemon: maximum issues to start (default: until queue empty)",
-    )
-    parser.add_argument(
-        "--daemon-dequeue-status",
-        action="append",
-        dest="daemon_dequeue_statuses",
-        metavar="STATUS",
-        help="daemon: lifecycle status treated as queued (repeatable); default Backlog",
-    )
-    parser.add_argument(
-        "--daemon-continue-on-error",
-        action="store_true",
-        help="daemon: log failures and continue with the next issue",
-    )
-    parser.add_argument(
-        "--daemon-sleep-seconds",
-        type=float,
-        default=0.0,
-        help="daemon: pause after each issue attempt (seconds)",
-    )
-    parser.add_argument(
-        "--base-ref",
-        default=None,
-        help="git base ref for PR review in full mode, for example develop",
-    )
-    parser.add_argument(
-        "--head-ref",
-        default=None,
-        help="git head ref for PR review in full mode, defaults inside reviewer to HEAD",
-    )
-    parser.add_argument(
-        "--release-to-main-accepted",
-        action="store_true",
-        help="allow DONE to close the issue instead of leaving it Release Ready",
-    )
-    parser.add_argument(
-        "--issue-number",
-        type=int,
-        default=None,
-        help="existing GitHub issue to adopt (full mode only); creates a worktree and opens a PR",
-    )
-    parser.add_argument(
-        "--worktrees-dir",
-        type=Path,
-        default=None,
-        help="directory for per-ticket git worktrees (default: <target>/.worktrees)",
-    )
-    parser.add_argument(
-        "--session-id",
-        default=None,
-        help="trajectory/session id; defaults to the ticket id",
-    )
-    return parser
+def cmd_run(args) -> None:
+    config = load_root_agent_config(Path(args.config))
+    target = Path(args.target)
+    graph = build_runtime(config, target_repo_root=target, use_docker=args.docker)
+    thread_id = str(uuid.uuid4())
+    cfg = {"configurable": {"thread_id": thread_id}}
+    issue_str = f"issue #{args.issue}" if args.issue else "next Backlog issue"
+    initial = {
+        "messages": [HumanMessage(content=f"Run full SDLC for {issue_str}.")],
+        "phase": "intake",
+        "memory_snapshot": {},
+        "retry_count": 0,
+        "current_issue": None,
+        "dev_result": None,
+        "review_result": None,
+        "release_result": None,
+    }
+    for chunk in graph.stream(initial, cfg, stream_mode="values"):
+        phase = chunk.get("phase", "")
+        msgs = chunk.get("messages", [])
+        if msgs:
+            last = msgs[-1]
+            content = getattr(last, "content", str(last))
+            print(f"[{phase}] {str(content)[:120]}")
+
+
+def cmd_daemon(args) -> None:
+    print("Daemon mode: processing Backlog issues until empty...")
+    while True:
+        try:
+            cmd_run(args)
+        except StopIteration:
+            print("Backlog empty. Daemon exiting.")
+            break
+        except KeyboardInterrupt:
+            print("Interrupted.")
+            break
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="sdlc-agent")
+    parser.add_argument("--config", default="sdlc-agent.yaml")
+    parser.add_argument("--target", default=".", help="Path to target repo root")
+    parser.add_argument("--docker", action="store_true", default=False)
+
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    bp = sub.add_parser("backlog", help="Read specs and seed GitHub backlog")
+    bp.set_defaults(func=cmd_backlog)
+
+    rp = sub.add_parser("run", help="Run SDLC for one issue")
+    rp.add_argument("--issue", type=int, default=None)
+    rp.set_defaults(func=cmd_run)
+
+    dp = sub.add_parser("daemon", help="Drain Backlog issues in a loop")
+    dp.set_defaults(func=cmd_daemon)
+
+    args = parser.parse_args()
+    args.func(args)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
