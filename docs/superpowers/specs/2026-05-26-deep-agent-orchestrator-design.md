@@ -127,5 +127,99 @@ Primary never calls git, writes files to the codebase, or runs tests. All code i
 
 ---
 
-*Section 3: Sub-agents — Developer/Tester, PR Reviewer, Release Engineer (to be written)*  
+---
+
+## Section 3: Sub-Agents
+
+All sub-agents are LangGraph `StateGraph` subgraphs invoked by Primary. Each has session-scoped memory (context injected by Primary at assignment time). Each runs its tools inside a Docker container for isolation.
+
+---
+
+### Developer / Tester — Docker Image #1 (full dev toolchain)
+
+**Purpose:** Takes an issue, runs a TDD loop, writes code + tests, commits to a feature branch, reports branch + test results back to Primary.
+
+#### Graph Nodes
+
+| Node | Responsibility |
+|---|---|
+| `setup_environment` | Clone/checkout target repo into Docker container. Install deps. Verify clean state. |
+| `plan_implementation` | Read issue + arch context. Plan: what files to create/modify, what tests are needed, what the contract looks like. |
+| `write_tests_first` | Write unit + integration tests per acceptance criteria. Tests must fail at this point (red). |
+| `implement` | Write implementation code. Run tests in sandbox. Iterate until green. Fix lint + type errors. |
+| `commit_and_report` | Commit to feature branch. Push. Report branch name + test results to Primary. |
+
+#### Tools
+- `read_file` / `write_file` — full codebase read/write
+- `run_tests` — sandboxed inside Docker container
+- `git_branch` / `git_commit` / `git_push`
+- `install_dependencies`
+- `search_codebase` — grep / AST search
+- `run_shell_command` — Docker-contained, no host access
+
+#### Memory
+Session-scoped. Injected at start: issue + acceptance criteria + arch context + memory snapshot from Primary. Fresh Docker container per issue — no state bleeds between tickets.
+
+---
+
+### PR Reviewer — Docker Image #2 (read-only env)
+
+**Purpose:** Receives issue + branch from Primary. Verifies every SDLC gate. Approves or rejects with actionable feedback. Never edits code.
+
+#### Graph Nodes
+
+| Node | Responsibility |
+|---|---|
+| `load_context` | Checkout the feature branch. Read issue, acceptance criteria, and Primary's arch context. |
+| `read_diff` | Read the full PR diff. Map changed files to acceptance criteria. Identify untested paths. |
+| `verify_tests` | Read test report + coverage. Verify unit tests exist for all new code. Verify integration tests cover the full acceptance criteria flow. |
+| `verify_standards` | Check coding standards, naming, structure, security anti-patterns, no hardcoded secrets. |
+| `approve_or_reject` | All gates pass → approve PR + post summary comment. Any gate fails → reject with specific, actionable feedback per criterion. |
+
+#### Tools
+- `read_pr_diff`
+- `read_test_report` / `read_coverage`
+- `read_file` (no write)
+- `github_approve_pr`
+- `github_request_changes`
+- `github_add_review_comment`
+
+#### Constraints
+Strictly read-only — no file writes, no git push, no code edits. Rejection feedback must be specific and actionable per failing criterion, not vague.
+
+#### Memory
+Session-scoped. Receives: issue + acceptance criteria + coding standards + component map from Primary's living memory. Primary absorbs review lessons via its own memory update after each ticket.
+
+---
+
+### Release Engineer — Docker Image #3 (deploy toolchain)
+
+**Purpose:** Simpler agent. Takes an approved branch. Verifies the build is clean. Presents a release summary to a human. Deploys only after human approval.
+
+#### Graph Nodes
+
+| Node | Responsibility |
+|---|---|
+| `prepare_release` | Checkout approved branch. Merge into main (or release branch). Tag the release. |
+| `build_and_verify` | Build the production Docker image. Run smoke tests inside the container. Verify it starts clean. |
+| `present_to_human` | Produce release summary: what changed, diff stats, test results, image size, smoke test output. |
+| `await_approval` **(INTERRUPT)** | LangGraph interrupt checkpoint. Execution pauses. Human reviews summary and responds: approve or reject. |
+| `deploy` / `rollback` | Approved → push image, deploy container, confirm running. Rejected → report reason to Primary, issue stays open. |
+
+#### Tools
+- `git_merge` / `git_tag`
+- `docker_build`
+- `run_smoke_tests`
+- `docker_deploy`
+- `generate_release_summary`
+- `interrupt` — LangGraph HITL checkpoint
+
+#### Constraints
+No auto-deploy ever. Human gate is a hard stop. Release engineer is intentionally the simplest agent — focused, not smart.
+
+#### Memory
+Session-scoped. Receives: approved branch + issue summary + deployment target config from Primary.
+
+---
+
 *Section 4: Project structure, config, Docker setup, migration plan (to be written)*
