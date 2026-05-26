@@ -67,58 +67,6 @@ def github_project(tmp_repo: Path) -> FixtureGitHubProject:
     return FixtureGitHubProject(repo_root=tmp_repo)
 
 
-# ----------------------------------------------------------------- fake LLM
-class _FakeChatMessage:
-    def __init__(self, content: str) -> None:
-        self.content = content
-
-
-class _FakeChoice:
-    def __init__(self, content: str) -> None:
-        self.message = _FakeChatMessage(content)
-
-
-class _FakeChatResponse:
-    def __init__(self, content: str) -> None:
-        self.choices = [_FakeChoice(content)]
-
-
-class _FakeCompletions:
-    def __init__(self, queue: list[str]) -> None:
-        self._queue = list(queue)
-        self.calls: list[dict[str, Any]] = []
-
-    def create(self, **kwargs: Any) -> _FakeChatResponse:
-        self.calls.append(kwargs)
-        if not self._queue:
-            raise RuntimeError("FakeLLM queue exhausted; provide more canned responses")
-        return _FakeChatResponse(self._queue.pop(0))
-
-
-class _FakeChat:
-    def __init__(self, queue: list[str]) -> None:
-        self.completions = _FakeCompletions(queue)
-
-
-class _FakeOpenAI:
-    """Drop-in fake matching the slice of openai.OpenAI() the wrapper uses."""
-
-    def __init__(self, queue: list[str]) -> None:
-        self.chat = _FakeChat(queue)
-
-
-@pytest.fixture()
-def fake_llm_factory() -> Callable[[list[dict[str, Any] | str]], OpenAIClient]:
-    """Factory: list of canned responses (dicts → JSON or raw strings) → OpenAIClient."""
-
-    def make(responses: list[dict[str, Any] | str]) -> OpenAIClient:
-        as_strings = [r if isinstance(r, str) else json.dumps(r) for r in responses]
-        fake = _FakeOpenAI(as_strings)
-        return OpenAIClient(api_key="sk-fake", model="gpt-test", client=fake)  # type: ignore[arg-type]
-
-    return make
-
-
 # -------------------------------------------------------------- git fixtures
 def _git(*args: str, cwd: Path) -> None:
     subprocess.run(
