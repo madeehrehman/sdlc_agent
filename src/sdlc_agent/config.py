@@ -95,6 +95,28 @@ class OrchestratorConfig(BaseModel):
     use_llm_supervisor: bool = False
 
 
+class DockerConfig(BaseModel):
+    """Docker image names for the three execution environments."""
+
+    developer_image: str = "sdlc-developer:latest"
+    reviewer_image: str = "sdlc-reviewer:latest"
+    release_image: str = "sdlc-release:latest"
+    network: str = "sdlc-net"
+
+
+class MemoryConfig(BaseModel):
+    """Primary agent living memory persistence settings."""
+
+    project_memory_path: str = ".deepagent/memory.md"
+
+
+class HitlConfig(BaseModel):
+    """Human-in-the-loop and retry policy settings."""
+
+    require_release_approval: bool = True
+    max_retries: int = 3
+
+
 class DeepAgentConfig(BaseModel):
     """Top-level config persisted at `.deepagent/config.yaml`."""
 
@@ -185,6 +207,9 @@ class RootAgentConfig(BaseModel):
     github: RootGitHubRuntimeConfig = Field(default_factory=RootGitHubRuntimeConfig)
     model: RootModelConfig = Field(default_factory=RootModelConfig)
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
+    docker: DockerConfig = Field(default_factory=DockerConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    hitl: HitlConfig = Field(default_factory=HitlConfig)
 
     @classmethod
     def from_yaml(

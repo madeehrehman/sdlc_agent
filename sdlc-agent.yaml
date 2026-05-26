@@ -1,28 +1,18 @@
 target:
   repo_url: https://github.com/madeehrehman/sdlc_agent_tictactoe
-  specs_path: specs.md
-
-github:
-  lifecycle_client: mcp
-  develop_branch: develop
-  release_branch: release
-  main_branch: main
-  mcp:
-    docker_image: ghcr.io/github/github-mcp-server
-    toolsets:
-      - repos
-      - issues
-      - pull_requests
-    timeout_seconds: 30
 
 model:
-  provider: openai
-  default: gpt-4o-mini
-  roles:
-    orchestrator: gpt-4.1
-    backlog_analyzer: gpt-4.1
-    developer: gpt-4.1
-    pr_reviewer: gpt-4.1
+  default: gpt-4o
+  temperature: 0
 
-# orchestrator:
-#   use_llm_supervisor: true
+docker:
+  developer_image: sdlc-developer:latest
+  reviewer_image: sdlc-reviewer:latest
+  release_image: sdlc-release:latest
+
+memory:
+  project_memory_path: .deepagent/memory.md
+
+hitl:
+  require_release_approval: true
+  max_retries: 3
