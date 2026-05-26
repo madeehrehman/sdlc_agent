@@ -1,0 +1,46 @@
+version: "3.9"
+
+networks:
+  sdlc-net:
+    driver: bridge
+
+services:
+  developer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.developer
+    image: sdlc-developer:latest
+    networks: [sdlc-net]
+    volumes:
+      - type: bind
+        source: ${TARGET_REPO_ROOT:-/tmp/target}
+        target: /workspace
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+
+  reviewer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.reviewer
+    image: sdlc-reviewer:latest
+    networks: [sdlc-net]
+    volumes:
+      - type: bind
+        source: ${TARGET_REPO_ROOT:-/tmp/target}
+        target: /workspace
+        read_only: true
+
+  release:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.release
+    image: sdlc-release:latest
+    networks: [sdlc-net]
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - type: bind
+        source: ${TARGET_REPO_ROOT:-/tmp/target}
+        target: /workspace
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
