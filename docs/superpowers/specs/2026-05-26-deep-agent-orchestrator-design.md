@@ -65,6 +65,67 @@ Primary (supervisor graph)
 
 ---
 
-*Section 2: Primary Agent — internal graph, tools, memory model (to be written)*  
+---
+
+## Section 2: Primary Agent
+
+### LangGraph StateGraph Nodes
+
+| Node | Responsibility |
+|---|---|
+| `intake` | Reads `specs.md` or an existing GitHub issue. Determines run mode (backlog vs single-issue). Loads project memory. |
+| `create_issues` | Decomposes spec into GitHub issues. Each issue gets: user story, acceptance criteria, architecture notes, coding standards from living memory. Labels `Backlog`. |
+| `assign_development` | Picks next `Backlog` issue. Labels `In Progress`. Invokes Developer/Tester subgraph with full context injection (issue + arch notes + memory snapshot). |
+| `assign_review` | Receives branch + test results from Developer. Labels issue `Ready for Review`. Invokes PR Reviewer subgraph with issue + branch + acceptance criteria. |
+| `assign_release` | PR approved. Labels issue `Approved`. Invokes Release Engineer subgraph. Waits for HITL checkpoint result. |
+| `close_issue` | Deployed. Closes GitHub issue with deployment summary comment. Updates living memory with lessons learned. |
+| `handle_rejection` | PR or deploy rejected. Labels issue `Changes Requested`. Re-assigns to Developer with reviewer feedback injected. Logs to memory. |
+| `next_ticket` | After close, loops back to `assign_development` for next `Backlog` issue, or exits if backlog empty. |
+
+### Primary's Tools
+
+All tools are GitHub-facing or memory-facing. **No code, git clone, file write, or test tools.**
+
+- `read_spec_file` — reads the project spec document
+- `create_github_issue` — creates issue with full story + acceptance criteria
+- `update_issue_label` — drives the workflow state visible in GitHub
+- `assign_issue` — assigns issue to the relevant sub-agent session
+- `add_issue_comment` — audit trail: every handshake gets a comment
+- `close_github_issue` — only Primary can call this
+- `list_open_issues` — backlog enumeration
+- `read_project_memory` / `write_project_memory` — living memory access
+
+### Living Memory Structure (`project_memory.md`)
+
+Persisted to disk across sessions. Injected as context into every sub-agent assignment.
+
+```
+architecture_decisions[]   — why key tech choices were made
+coding_standards{}         — language, patterns, naming conventions, test requirements
+lessons_learned[]          — what went wrong/right per closed ticket
+component_map{}            — what files/modules own what domain
+open_risks[]               — known technical debt or deferred decisions
+```
+
+### Graph State Shape
+
+```python
+class PrimaryState(TypedDict):
+    current_issue: Issue | None
+    phase: str                    # intake | dev | review | release | done
+    dev_result: DevResult | None
+    review_result: ReviewResult | None
+    release_result: ReleaseResult | None
+    memory_snapshot: dict
+    retry_count: int
+    messages: list[BaseMessage]
+```
+
+### Constraint
+
+Primary never calls git, writes files to the codebase, or runs tests. All code interaction is delegated to sub-agents via subgraph invocation.
+
+---
+
 *Section 3: Sub-agents — Developer/Tester, PR Reviewer, Release Engineer (to be written)*  
 *Section 4: Project structure, config, Docker setup, migration plan (to be written)*
